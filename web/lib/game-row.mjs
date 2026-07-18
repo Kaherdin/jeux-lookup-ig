@@ -1,0 +1,39 @@
+// mapping objet enrichi → colonnes de la table game (hors listId)
+export function toRow(g) {
+  const num = (v) => (v == null || v === "" ? null : Number(v));
+  const str = (v) => (v == null || v === "" ? null : String(v));
+  return {
+    titre: g.titre,
+    igdbId: str(g.igdbId),
+    steamAppId: str(g.steamAppId),
+    image: str(g.image),
+    genre: str(g.genre),
+    univers: str(g.univers),
+    plateformes: Array.isArray(g.plateformes) ? g.plateformes : [],
+    sortieISO: str(g.sortieISO),
+    sortiePrec: str(g.sortiePrec),
+    dispo: !!g.dispo,
+    gratuit: !!g.gratuit,
+    gratuitMention: str(g.gratuitMention),
+    bonPlan: !!g.bonPlan,
+    bienNote: !!g.bienNote,
+    comingSoon: g.comingSoon == null ? null : !!g.comingSoon,
+    prix: g.prix ?? null,
+    prixSteam: g.prixSteam == null ? null : Number(g.prixSteam),
+    reducPct: Number(g.reducPct || 0),
+    note: num(g.note),
+    noteSource: str(g.noteSource),
+    metacritic: num(g.metacritic),
+    steamPct: num(g.steamPct),
+    modes: g.modes ?? null,
+    modesDetail: g.modesDetail ?? null,
+    nbJoueurs: str(g.nbJoueurs),
+    nbJoueursMax: num(g.nbJoueursMax),
+    urlSteam: str(g.urlSteam),
+    urlStore: str(g.urlStore),
+    urlPsn: str(g.urlPsn),
+    reel: str(g.reel),
+    createur: str(g.createur),
+    ajouteLe: str(g.ajouteLe),
+  };
+}

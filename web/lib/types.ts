@@ -1,0 +1,64 @@
+export type Prix = {
+  meilleur?: number | null;
+  devise?: string;
+  store?: string;
+  plusBasHisto?: number | null;
+} | null;
+
+export type Modes = {
+  solo?: boolean;
+  coop?: boolean;
+  pvp?: boolean;
+  multi?: boolean;
+} | null;
+
+export type ModesDetail = {
+  coopOnline?: boolean;
+  coopCouch?: boolean;
+  coopLan?: boolean;
+  pvpOnline?: boolean;
+  pvpCouch?: boolean;
+  pvpLan?: boolean;
+  remotePlay?: boolean;
+  crossPlatform?: boolean;
+} | null;
+
+export type Game = {
+  id: string;
+  titre: string;
+  image: string | null;
+  genre: string | null;
+  univers: string | null;
+  plateformes: string[];
+  sortieISO: string | null;
+  sortiePrec: string | null;
+  dispo: boolean;
+  gratuit: boolean;
+  gratuitMention: string | null;
+  bonPlan: boolean;
+  bienNote: boolean;
+  comingSoon: boolean | null;
+  prix: Prix;
+  prixSteam: number | null;
+  reducPct: number;
+  note: number | null;
+  noteSource: string | null;
+  metacritic: number | null;
+  steamPct: number | null;
+  modes: Modes;
+  modesDetail: ModesDetail;
+  nbJoueurs: string | null;
+  nbJoueursMax: number | null;
+  urlSteam: string | null;
+  urlStore: string | null;
+  urlPsn: string | null;
+  reel: string | null;
+};
+
+export type ListMeta = {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  ownerId?: string | null;
+};
