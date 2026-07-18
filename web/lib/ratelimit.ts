@@ -4,8 +4,10 @@ import { Redis } from "@upstash/redis";
 // Rate-limit distribué via Upstash Redis.
 // GRACIEUX : si UPSTASH_REDIS_REST_URL / _TOKEN sont absents, `allow()` renvoie
 // toujours true (aucune limite) — l'app tourne normalement sans Upstash configuré.
-const url = process.env.UPSTASH_REDIS_REST_URL;
-const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+// Accepte les 2 conventions de nommage : Upstash direct (UPSTASH_REDIS_REST_*)
+// ET l'intégration Vercel Marketplace / Vercel KV (KV_REST_API_*).
+const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 const redis = url && token ? new Redis({ url, token }) : null;
 
 type Window = `${number} ${"s" | "m" | "h" | "d"}`;

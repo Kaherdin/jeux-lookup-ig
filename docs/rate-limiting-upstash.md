@@ -30,11 +30,22 @@ npm install @upstash/ratelimit @upstash/redis
 
 ### Créer la base (gratuit)
 
-1. https://console.upstash.com → **Create Database** → Redis → région proche de
-   ta région Vercel (ex. `us-east-1` / `iad1`).
-2. Onglet **REST API** → copie `UPSTASH_REDIS_REST_URL` et `UPSTASH_REDIS_REST_TOKEN`.
-3. Ajoute ces 2 variables dans `.env.local` **et** dans Vercel → Settings →
-   Environment Variables (Production + Preview).
+**Option A — via Vercel (recommandé).** Vercel → onglet **Storage** → **Upstash**
+(Serverless DB). Ça crée la base **et injecte automatiquement les variables d'env**
+dans le projet — pas de copier-coller de tokens. Pense juste à `vercel env pull
+.env.local` (ou copie les 2 vars) pour le dev local.
+
+**Option B — Upstash direct.** https://console.upstash.com → **Create Database** →
+Redis → région proche de Vercel (ex. `us-east-1` / `iad1`) → onglet **REST API** →
+copie l'URL + le token, ajoute-les en `.env.local` **et** dans Vercel.
+
+> ⚠️ **Nom des variables selon la méthode :** l'intégration Vercel peut nommer les
+> variables `UPSTASH_REDIS_REST_URL`/`_TOKEN` **ou** `KV_REST_API_URL`/`KV_REST_API_TOKEN`
+> (ancienne convention Vercel KV). Rends le code tolérant aux deux :
+> ```ts
+> const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+> const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+> ```
 
 **Coût :** plan Free = 500 000 commandes/mois + 256 Mo, sans CB. Un check de
 rate-limit ≈ 1 commande → un petit projet reste gratuit. Au-delà : $0.20 /
