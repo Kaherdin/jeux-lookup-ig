@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { AddGamesDialog } from "@/components/add-games-dialog";
+import { GameDetailDialog } from "@/components/game-detail-dialog";
 
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
 const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
@@ -62,6 +63,7 @@ const FILTERS: [keyof Game | "coop" | "pvp" | "solo", string][] = [
 export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListMeta; canEdit: boolean }) {
   const [q, setQ] = useState("");
   const [genreFilter, setGenreFilter] = useState("all");
+  const [platformFilter, setPlatformFilter] = useState("all");
   const [sortKey, setSortKey] = useState("note");
   const [sortDir, setSortDir] = useState(-1);
   const [filters, setFilters] = useState<Set<string>>(() => new Set());
@@ -70,6 +72,12 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
     const c = new Map<string, number>();
     for (const g of games) for (const t of genreTokens(g)) c.set(t, (c.get(t) ?? 0) + 1);
     return [...c.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+  }, [games]);
+
+  const platforms = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const g of games) for (const p of g.plateformes ?? []) c.set(p, (c.get(p) ?? 0) + 1);
+    return [...c.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
   }, [games]);
 
   const stats = useMemo(() => [
@@ -83,6 +91,7 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
     const s = q.toLowerCase().trim();
     if (s) l = l.filter((g) => (g.titre + " " + (g.genre ?? "") + " " + (g.univers ?? "")).toLowerCase().includes(s));
     if (genreFilter !== "all") l = l.filter((g) => genreTokens(g).some((t) => t.toLowerCase() === genreFilter.toLowerCase()));
+    if (platformFilter !== "all") l = l.filter((g) => (g.plateformes ?? []).includes(platformFilter));
     for (const f of filters) {
       if (f === "coop") l = l.filter((g) => md(g).coop);
       else if (f === "pvp") l = l.filter((g) => md(g).pvp);
@@ -96,7 +105,7 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
       return r * sortDir || a.titre.localeCompare(b.titre);
     });
     return l;
-  }, [games, q, genreFilter, sortKey, sortDir, filters]);
+  }, [games, q, genreFilter, platformFilter, sortKey, sortDir, filters]);
 
   function toggleFilter(f: string) {
     setFilters((prev) => { const n = new Set(prev); n.has(f) ? n.delete(f) : n.add(f); return n; });
@@ -144,10 +153,17 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
       <div className="flex flex-wrap items-center gap-2.5">
         <Input placeholder="Rechercher un titre, un genre, un univers…" value={q} onChange={(e) => setQ(e.target.value)} className="flex-1 min-w-[220px]" />
         <Select value={genreFilter} onValueChange={setGenreFilter}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="Genre" /></SelectTrigger>
+          <SelectTrigger className="w-[150px]"><SelectValue placeholder="Genre" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Tous les genres</SelectItem>
             {genres.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={platformFilter} onValueChange={setPlatformFilter}>
+          <SelectTrigger className="w-[140px]"><SelectValue placeholder="Console" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Toutes consoles</SelectItem>
+            {platforms.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={sortKey} onValueChange={(v) => { setSortKey(v); setSortDir(SORT_DEFDIR[v]); }}>
@@ -181,7 +197,7 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
 
       {/* table */}
       <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="cursor-pointer p-2.5 whitespace-nowrap" onClick={() => changeSort("titre")}>Jeu{arrow("titre")}</th>
@@ -219,7 +235,9 @@ function Row({ g }: { g: Game }) {
           {g.image ? <img src={g.image} loading="lazy" alt="" className="h-[43px] w-[92px] shrink-0 rounded-md object-cover" />
             : <div className="flex h-[43px] w-[92px] shrink-0 items-center justify-center rounded-md bg-muted text-lg">🎮</div>}
           <div className="min-w-0">
-            <div className="font-bold">{g.titre}</div>
+            <GameDetailDialog g={g} trigger={
+              <button className="block max-w-[230px] truncate text-left font-bold hover:text-primary hover:underline">{g.titre}</button>
+            } />
             <div className="max-w-[230px] truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
           </div>
         </div>

@@ -119,6 +119,9 @@ export async function steamDetails(appid) {
     coop, pvp,
     multi: H(1) || H(20) || coop || pvp,
     detail,
+    screenshots: (d.screenshots || []).slice(0, 10).map(s => s.path_full).filter(Boolean),
+    trailer: (() => { const m = (d.movies || [])[0]; return m ? (m.mp4?.max || m.webm?.max || "") : ""; })(),
+    trailerThumb: (d.movies || [])[0]?.thumbnail || "",
     url: `https://store.steampowered.com/app/${appid}/`,
   };
 }
@@ -146,7 +149,7 @@ async function igdbAuth(env) {
 }
 export async function igdbLookup(title, env) {
   const tok = await igdbAuth(env); if (!tok) return null;
-  const body = `search "${title.replace(/"/g, '')}"; fields name,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,url,game_modes.slug; limit 1;`;
+  const body = `search "${title.replace(/"/g, '')}"; fields name,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,url,game_modes.slug,multiplayer_modes.*; limit 1;`;
   const j = await fetch("https://api.igdb.com/v4/games", {
     method: "POST",
     headers: { "Client-ID": env.TWITCH_ID, Authorization: `Bearer ${tok}`, "Content-Type": "text/plain" },
@@ -154,6 +157,11 @@ export async function igdbLookup(title, env) {
   }).then(r => r.json()).catch(() => []);
   const g = Array.isArray(j) ? j[0] : null; if (!g) return null;
   const modes = (g.game_modes || []).map(m => m.slug);
+  // nb de joueurs max via multiplayer_modes (onlinemax / offlinemax / *coopmax)
+  const mp = (g.multiplayer_modes || [])[0] || {};
+  const joueursMax = Math.max(
+    mp.onlinemax || 0, mp.offlinemax || 0, mp.onlinecoopmax || 0, mp.offlinecoopmax || 0
+  ) || null;
   return {
     igdbId: g.id, igdbName: g.name,
     sortieISO: isoFromUnix(g.first_release_date),
@@ -165,6 +173,7 @@ export async function igdbLookup(title, env) {
     coop: modes.includes("co-operative"),
     pvp: modes.some(m => /player-versus-player|battle-royale/.test(m)),
     multi: modes.includes("multiplayer") || modes.includes("co-operative"),
+    joueursMax,
     url: g.url,
   };
 }
@@ -317,10 +326,11 @@ export async function enrichGame(rec, env) {
   else if (igdb?.totalRating != null) { noteAffichee = igdb.totalRating; noteSource = "IGDB"; }
   else if (reviews?.pct != null) { noteAffichee = reviews.pct; noteSource = `Steam ${reviews.count} avis`; }
 
-  // nb de joueurs max (pour le tri)
-  const nbJoueurs = parseJoueurs(rec.legende) || rec.nbJoueurs || "";
+  // nb de joueurs : légende Insta > IGDB multiplayer_modes > existant
+  let nbJoueurs = parseJoueurs(rec.legende) || rec.nbJoueurs || "";
+  if (!nbJoueurs && igdb?.joueursMax) nbJoueurs = igdb.joueursMax > 1 ? `1-${igdb.joueursMax}` : "1";
   const mJ = nbJoueurs.match(/(\d+)\s*$/) || nbJoueurs.match(/(\d+)/);
-  const nbJoueursMax = mJ ? +mJ[1] : null;
+  const nbJoueursMax = mJ ? +mJ[1] : (igdb?.joueursMax ?? null);
 
   const g = {
     titre: title,
@@ -343,6 +353,8 @@ export async function enrichGame(rec, env) {
     plateformes: igdb?.plateformes?.length ? igdb.plateformes : (rec.plateforme ? [rec.plateforme] : []),
     gratuitCsv: (rec.gratuitCsv || "").trim(),
     image: steam?.header || "",
+    screenshots: steam?.screenshots || [],
+    trailer: steam?.trailer || "", trailerThumb: steam?.trailerThumb || "",
     urlSteam: steam?.url || "", urlIgdb: igdb?.url || "", urlStore: prix?.url || "",
     urlPsn: rec.psnUrl || "",
     reel: rec.reel || "", createur: rec.createur || "",
@@ -389,7 +401,8 @@ export async function detectLight(input, env) {
   };
 }
 
-// Analyse un lot d'entrées (texte multi-lignes + playlist) → liste de détections légères.
+// Analyse un lot d'entrées (texte multi-lignes + playlist) → jeux ENRICHIS complets (preview).
+// Chaque jeu non-doublon est entièrement enrichi (genre, joueurs, note, prix, date, screenshots…).
 export async function detectMany({ text = "", playlist = "" }, env, existingTitles = []) {
   const inputs = [];
   if (playlist) {
@@ -399,19 +412,28 @@ export async function detectMany({ text = "", playlist = "" }, env, existingTitl
   }
   if (text) inputs.push(...text.split(/\r?\n/).map(s => s.trim()).filter(Boolean));
   if (!inputs.length) return { error: "Rien à analyser." };
+  if (inputs.length > 40) inputs.length = 40; // garde-fou
 
   const seen = new Set(existingTitles.map(t => t.toLowerCase()));
   const out = [];
-  // concurrence limitée pour ne pas se faire rate-limiter
   const CONC = 4;
   for (let i = 0; i < inputs.length; i += CONC) {
-    const batch = await Promise.all(inputs.slice(i, i + CONC).map(inp => detectLight(inp, env).catch(() => null)));
-    for (const d of batch) {
-      if (!d || !d.titre) continue;
+    const batch = await Promise.all(inputs.slice(i, i + CONC).map(async (inp) => {
+      const d = await detectLight(inp, env).catch(() => null);
+      if (!d || !d.titre) return null;
       const key = d.titre.toLowerCase();
-      d.duplicate = seen.has(key);
-      if (!d.duplicate) seen.add(key);
-      out.push(d);
+      if (seen.has(key)) return { ...d, duplicate: true };
+      const enriched = await enrichGame(
+        { titre: d.titre, steamAppId: d.steamAppId, psnUrl: d.psnUrl,
+          reel: d.source === "instagram" || d.source === "youtube" ? d.input : "" },
+        env
+      ).catch(() => null);
+      return enriched ? { ...enriched, input: d.input, source: d.source, duplicate: false } : { ...d, duplicate: false };
+    }));
+    for (const g of batch) {
+      if (!g) continue;
+      if (!g.duplicate) seen.add(g.titre.toLowerCase());
+      out.push(g);
     }
   }
   return { games: out };

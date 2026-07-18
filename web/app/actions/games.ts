@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { authActionClient } from "@/lib/safe-action";
 import { getListBySlug, gameExists, upsertGame, getTitles, createGames } from "@/lib/store";
 import { detectTitle, enrichGame, detectMany } from "@/lib/enrich.mjs";
+import type { PreviewGame } from "@/lib/types";
 
 const env = () => ({
   TWITCH_ID: process.env.TWITCH_ID,
@@ -53,58 +54,20 @@ export const detectGames = authActionClient
     const existing = await getTitles(list.id);
     const res = await detectMany({ text: text || "", playlist: playlist || "" }, env(), existing);
     if (res.error) throw new Error(res.error);
-    return { games: res.games as DetectedGame[] };
+    return { games: res.games as PreviewGame[] };
   });
 
+// reçoit les jeux DÉJÀ enrichis (depuis la preview) → enregistre directement
 export const addBatch = authActionClient
   .inputSchema(
     z.object({
       slug: z.string(),
-      items: z.array(
-        z.object({
-          titre: z.string(),
-          steamAppId: z.string().optional(),
-          source: z.string().optional(),
-          input: z.string().optional(),
-          psnUrl: z.string().optional(),
-        })
-      ),
+      items: z.array(z.object({ titre: z.string() }).passthrough()),
     })
   )
   .action(async ({ parsedInput: { slug, items }, ctx }) => {
     const list = await assertCanEdit(slug, ctx.user.id);
-    const existing = new Set((await getTitles(list.id)).map((t) => t.toLowerCase()));
-    const todo = items.filter((it) => it.titre && !existing.has(it.titre.toLowerCase()));
-    const enriched: Array<Record<string, unknown> & { titre: string }> = [];
-    const CONC = 4;
-    for (let i = 0; i < todo.length; i += CONC) {
-      const r = await Promise.all(
-        todo.slice(i, i + CONC).map((it) =>
-          enrichGame(
-            {
-              titre: it.titre,
-              steamAppId: it.steamAppId,
-              psnUrl: it.psnUrl,
-              reel: it.source === "instagram" || it.source === "youtube" ? it.input : "",
-              ajouteLe: new Date().toISOString().slice(0, 10),
-            },
-            env()
-          ).catch(() => null)
-        )
-      );
-      for (const g of r) if (g && g.titre) enriched.push(g);
-    }
-    const added = await createGames(list.id, enriched);
+    const added = await createGames(list.id, items as Array<Record<string, unknown> & { titre: string }>);
     revalidate(slug);
-    return { added, titres: enriched.map((g) => g.titre) };
+    return { added, titres: items.map((it) => it.titre) };
   });
-
-export type DetectedGame = {
-  input: string;
-  source: string;
-  titre: string;
-  steamAppId: string;
-  image: string;
-  psnUrl: string;
-  duplicate?: boolean;
-};

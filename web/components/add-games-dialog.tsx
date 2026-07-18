@@ -7,7 +7,9 @@ import { z } from "zod";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
-import { addGame, detectGames, addBatch, type DetectedGame } from "@/app/actions/games";
+import { addGame, detectGames, addBatch } from "@/app/actions/games";
+import type { PreviewGame } from "@/lib/types";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -37,7 +39,7 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
   // --- ajout multiple ---
   const [text, setText] = useState("");
   const [playlist, setPlaylist] = useState("");
-  const [detected, setDetected] = useState<DetectedGame[] | null>(null);
+  const [detected, setDetected] = useState<PreviewGame[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const detect = useAction(detectGames, {
@@ -66,10 +68,14 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
 
   function submitBatch() {
     if (!detected || !selected.size) return;
-    const items = [...selected].map((i) => detected[i]).filter(Boolean).map((d) => ({
-      titre: d.titre, steamAppId: d.steamAppId || undefined, source: d.source, input: d.input, psnUrl: d.psnUrl || undefined,
-    }));
+    const items = [...selected].map((i) => detected[i]).filter(Boolean);
     batch.execute({ slug, items });
+  }
+
+  function toggleAll() {
+    if (!detected) return;
+    const selectable = detected.map((d, i) => (d.duplicate ? -1 : i)).filter((i) => i >= 0);
+    setSelected(selected.size >= selectable.length ? new Set() : new Set(selectable));
   }
 
   return (
@@ -111,23 +117,62 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
             </div>
             <p className="text-xs text-muted-foreground">Détecte plusieurs jeux d&apos;un coup et te les affiche avant ajout, pour confirmation.</p>
 
-            {detected && detected.length > 0 && (
-              <div className="max-h-[320px] space-y-1.5 overflow-y-auto">
-                {detected.map((d, i) => (
-                  <label key={i} className={cn("flex cursor-pointer items-center gap-2.5 rounded-lg border p-2", d.duplicate && "opacity-50")}>
-                    <Checkbox checked={selected.has(i)} disabled={d.duplicate}
-                      onCheckedChange={(c) => setSelected((prev) => { const n = new Set(prev); c ? n.add(i) : n.delete(i); return n; })} />
-                    {d.image ? <img src={d.image} alt="" className="h-[30px] w-16 shrink-0 rounded object-cover" />
-                      : <span className="flex h-[30px] w-16 shrink-0 items-center justify-center rounded bg-muted">🎮</span>}
-                    <span className="min-w-0 flex-1 truncate font-semibold">{d.titre}</span>
-                    <span className="whitespace-nowrap text-xs text-muted-foreground">{d.source}{d.duplicate ? " · déjà présent" : ""}</span>
-                  </label>
-                ))}
-              </div>
+            {detected && (
+              detected.length === 0 ? (
+                <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">Aucun jeu détecté. Vérifie les liens/titres.</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">
+                      {detected.length} jeu(x) trouvé(s) · <span className="font-semibold text-foreground">{selected.size} sélectionné(s)</span>
+                    </span>
+                    <Button type="button" variant="ghost" size="sm" onClick={toggleAll}>
+                      {selected.size ? "Tout décocher" : "Tout cocher"}
+                    </Button>
+                  </div>
+                  <div className="max-h-[360px] space-y-1.5 overflow-y-auto pr-1">
+                    {detected.map((d, i) => <PreviewRow key={i} d={d} checked={selected.has(i)}
+                      onCheck={(c) => setSelected((prev) => { const n = new Set(prev); c ? n.add(i) : n.delete(i); return n; })} />)}
+                  </div>
+                </div>
+              )
             )}
           </TabsContent>
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PreviewRow({ d, checked, onCheck }: { d: PreviewGame; checked: boolean; onCheck: (c: boolean) => void }) {
+  const dup = !!d.duplicate;
+  const note = d.note ?? d.metacritic ?? d.steamPct ?? null;
+  const p = d.prix?.meilleur ?? d.prixSteam ?? null;
+  const dev = d.prix?.devise ?? "CHF";
+  const year = d.sortieISO ? d.sortieISO.slice(0, 4) : null;
+  return (
+    <label className={cn("flex cursor-pointer gap-3 rounded-lg border p-2 transition",
+      dup ? "opacity-50" : checked ? "border-primary bg-primary/5" : "hover:bg-muted/50")}>
+      <Checkbox className="mt-1" checked={checked} disabled={dup} onCheckedChange={(c) => onCheck(!!c)} />
+      {d.image ? <img src={d.image} alt="" className="h-14 w-28 shrink-0 rounded object-cover" />
+        : <span className="flex h-14 w-28 shrink-0 items-center justify-center rounded bg-muted text-lg">🎮</span>}
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate font-semibold">{d.titre}</span>
+          {dup && <Badge variant="secondary" className="shrink-0">déjà présent</Badge>}
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {note != null && <Badge variant="outline">⭐ {note}</Badge>}
+          {d.gratuit ? <Badge variant="outline">Gratuit</Badge> : p != null && <Badge variant="outline">{p} {dev}</Badge>}
+          {year && <Badge variant="outline">{year}</Badge>}
+          {d.nbJoueurs && <Badge variant="outline">👥 {d.nbJoueurs}</Badge>}
+          {d.modes?.solo && <Badge variant="outline">Solo</Badge>}
+          {d.modes?.coop && <Badge variant="outline">Coop</Badge>}
+          {d.modes?.pvp && <Badge variant="outline">PvP</Badge>}
+          {(d.plateformes ?? []).slice(0, 4).map((pl, i) => <Badge key={i} variant="secondary">{pl}</Badge>)}
+        </div>
+        {d.genre && <div className="truncate text-xs text-muted-foreground">{d.genre}</div>}
+      </div>
+    </label>
   );
 }

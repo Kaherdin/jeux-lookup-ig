@@ -100,6 +100,9 @@ model Game {
   genre          String?
   univers        String?
   plateformes    String[]
+  screenshots    String[]
+  trailer        String?
+  trailerThumb   String?
   sortieISO      String?
   sortiePrec     String?
   dispo          Boolean  @default(false)

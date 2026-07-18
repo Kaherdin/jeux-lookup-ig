@@ -30,6 +30,9 @@ export type Game = {
   genre: string | null;
   univers: string | null;
   plateformes: string[];
+  screenshots: string[];
+  trailer: string | null;
+  trailerThumb: string | null;
   sortieISO: string | null;
   sortiePrec: string | null;
   dispo: boolean;
@@ -53,6 +56,14 @@ export type Game = {
   urlStore: string | null;
   urlPsn: string | null;
   reel: string | null;
+};
+
+export type PreviewGame = Partial<Game> & {
+  titre: string;
+  input?: string;
+  source?: string;
+  duplicate?: boolean;
+  steamAppId?: string | null;
 };
 
 export type ListMeta = {
