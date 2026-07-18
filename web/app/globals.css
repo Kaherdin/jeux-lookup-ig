@@ -40,6 +40,23 @@ thead th .arrow{color:var(--accent);margin-left:4px}
   color:var(--txt);padding:12px 14px;border-radius:10px;font-size:15px;outline:none}
 .add input[type=text]:focus{border-color:var(--accent)}
 .add .hint{color:var(--dim);font-size:12px;margin-top:9px;line-height:1.5}
+.add textarea{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--txt);
+  padding:11px 13px;border-radius:10px;font-size:14px;outline:none;resize:vertical;font-family:inherit}
+.add textarea:focus{border-color:var(--accent)}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tab{cursor:pointer;background:var(--panel);border:1px solid var(--line);color:var(--dim);
+  padding:8px 14px;border-radius:9px;font-size:13px;font-weight:700}
+.tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.detected{margin-top:12px;display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto}
+.drow{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:7px 11px;cursor:pointer}
+.drow.dup{opacity:.5}
+.drow input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent)}
+.drow img{width:64px;height:30px;object-fit:cover;border-radius:4px;flex-shrink:0}
+.drow .noimg2{width:64px;height:30px;display:flex;align-items:center;justify-content:center;background:var(--panel2);border-radius:4px;flex-shrink:0}
+.drow .dtitle{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drow .dsrc{color:var(--dim);font-size:12px;white-space:nowrap}
+.b.plat{background:rgba(139,152,169,.16);color:var(--txt)}
 .add .msg{padding:10px 13px;border-radius:10px;font-size:13px;margin-top:12px}
 .add .msg.err{background:rgba(248,81,73,.12);color:#f85149}
 .add .msg.ok{background:rgba(63,185,80,.12);color:var(--ok)}

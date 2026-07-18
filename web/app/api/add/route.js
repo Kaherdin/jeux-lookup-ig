@@ -29,6 +29,7 @@ export async function POST(req) {
   const g = await enrichGame({
     titre: det.titre,
     steamAppId: det.steamAppId,
+    psnUrl: det.psnUrl,
     reel: (det.source === "instagram" || det.source === "youtube") ? input : "",
     ajouteLe: new Date().toISOString().slice(0, 10),
   }, env);

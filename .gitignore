@@ -9,3 +9,5 @@ enrich-cache.json
 
 .vercel
 .env*
+
+.vscode/

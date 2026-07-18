@@ -19,6 +19,7 @@ export function loadEnv() {
     TWITCH_ID: process.env.TWITCH_ID,
     TWITCH_SECRET: process.env.TWITCH_SECRET,
     ITAD_KEY: process.env.ITAD_KEY,
+    YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
   };
 }
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -246,6 +247,16 @@ export async function detectTitle(input) {
     const d = await steamDetails(m[1]);
     return { titre: d?.steamName || "", steamAppId: m[1], source: "steam" };
   }
+  // PlayStation Store (best-effort : og:title / twitter:title / <title>)
+  if (/store\.playstation\.com\//.test(s)) {
+    const html = await fetchText(s);
+    let t = metaContent(html, "og:title") || metaContent(html, "twitter:title") || "";
+    if (!t) { const m2 = html.match(/<title>([^<]*)<\/title>/i); t = m2 ? m2[1] : ""; }
+    t = t.split(/\s*[|·–-]\s*/)[0]
+      .replace(/\s+(sur|on|pour|for)\s+PlayStation.*/i, "")
+      .replace(/PlayStation.*/i, "").trim();
+    return { titre: cleanTitle(t), source: "psn", psnUrl: s };
+  }
   // YouTube (oEmbed → titre vidéo → nettoyage)
   if (/youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts/.test(s)) {
     const j = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(s)}&format=json`)
@@ -333,10 +344,75 @@ export async function enrichGame(rec, env) {
     gratuitCsv: (rec.gratuitCsv || "").trim(),
     image: steam?.header || "",
     urlSteam: steam?.url || "", urlIgdb: igdb?.url || "", urlStore: prix?.url || "",
+    urlPsn: rec.psnUrl || "",
     reel: rec.reel || "", createur: rec.createur || "",
     ajouteLe: rec.ajouteLe || "",
   };
   Object.assign(g, computeFlags(g));
   if (!g.gratuit && /gratuit|free/i.test(g.gratuitCsv)) g.gratuitMention = g.gratuitCsv;
   return g;
+}
+
+// --- ajout multiple ---------------------------------------------------
+// Récupère les titres des vidéos d'une playlist YouTube (nécessite YOUTUBE_API_KEY).
+export async function youtubePlaylistTitles(url, env) {
+  const key = env.YOUTUBE_API_KEY;
+  const m = url.match(/[?&]list=([\w-]+)/);
+  if (!key) return { error: "YOUTUBE_API_KEY manquante (playlist YouTube)." };
+  if (!m) return { error: "URL de playlist YouTube invalide (pas de paramètre list=)." };
+  const titles = [];
+  let pageToken = "";
+  for (let i = 0; i < 5; i++) { // max 250 vidéos
+    const u = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${m[1]}&key=${key}${pageToken ? `&pageToken=${pageToken}` : ""}`;
+    const j = await fetch(u).then(r => r.json()).catch(() => ({}));
+    if (j.error) return { error: j.error?.message || "Erreur API YouTube." };
+    for (const it of (j.items || [])) {
+      const t = it.snippet?.title;
+      if (t && !/deleted video|private video/i.test(t)) titles.push(t);
+    }
+    if (!j.nextPageToken) break;
+    pageToken = j.nextPageToken;
+  }
+  return { titles };
+}
+
+// Détection « légère » pour la preview : résout le titre canonique (via Steam) sans tout enrichir.
+export async function detectLight(input, env) {
+  const det = await detectTitle(input);
+  let titre = det.titre, appid = det.steamAppId || "", name = titre, image = "";
+  if (titre && !appid) { const s = await steamSearch(titre); if (s) { appid = s.appid; name = s.name; } }
+  if (appid) { const d = await steamDetails(appid); if (d) { name = d.steamName || name; image = d.header || ""; } }
+  return {
+    input, source: det.source,
+    titre: (name || titre || "").trim(),
+    steamAppId: appid, image, psnUrl: det.psnUrl || "",
+  };
+}
+
+// Analyse un lot d'entrées (texte multi-lignes + playlist) → liste de détections légères.
+export async function detectMany({ text = "", playlist = "" }, env, existingTitles = []) {
+  const inputs = [];
+  if (playlist) {
+    const r = await youtubePlaylistTitles(playlist, env);
+    if (r.error) return { error: r.error };
+    inputs.push(...r.titles);
+  }
+  if (text) inputs.push(...text.split(/\r?\n/).map(s => s.trim()).filter(Boolean));
+  if (!inputs.length) return { error: "Rien à analyser." };
+
+  const seen = new Set(existingTitles.map(t => t.toLowerCase()));
+  const out = [];
+  // concurrence limitée pour ne pas se faire rate-limiter
+  const CONC = 4;
+  for (let i = 0; i < inputs.length; i += CONC) {
+    const batch = await Promise.all(inputs.slice(i, i + CONC).map(inp => detectLight(inp, env).catch(() => null)));
+    for (const d of batch) {
+      if (!d || !d.titre) continue;
+      const key = d.titre.toLowerCase();
+      d.duplicate = seen.has(key);
+      if (!d.duplicate) seen.add(key);
+      out.push(d);
+    }
+  }
+  return { games: out };
 }
