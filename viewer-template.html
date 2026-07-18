@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🎮 Mes jeux à jouer</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#141922; --panel2:#1b2230; --line:#252d3b;
+  --txt:#e6edf3; --dim:#8b98a9; --accent:#7c5cff; --accent-d:#6544e0;
+  --ok:#3fb950; --gratuit:#58a6ff; --deal:#ff8c42; --note:#f5c518;
+  --coop:#2dd4bf; --pvp:#f472b6; --solo:#a78bfa;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:radial-gradient(1100px 520px at 15% -10%,#1a1240 0%,transparent 55%),var(--bg);color:var(--txt);}
+.wrap{max-width:1320px;margin:0 auto;padding:24px 18px 90px}
+a{color:var(--accent)}
+header{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+header h1{margin:0 0 4px;font-size:27px;letter-spacing:-.5px}
+header .sub{color:var(--dim);font-size:13px}
+.btn{cursor:pointer;border:none;border-radius:10px;font-weight:700;font-size:14px;padding:11px 16px;
+  background:var(--accent);color:#fff;transition:.15s}
+.btn:hover{background:var(--accent-d)}
+.btn.ghost{background:var(--panel);color:var(--txt);border:1px solid var(--line)}
+.btn.ghost:hover{border-color:var(--accent)}
+.dirbtn{font-size:13px;padding:11px 13px;white-space:nowrap}
+
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 15px;min-width:92px}
+.stat b{display:block;font-size:22px}
+.stat span{color:var(--dim);font-size:12px}
+
+.add{background:linear-gradient(135deg,#1a1340,#131a2c);border:1px solid var(--line);border-radius:16px;padding:0;margin-bottom:22px;overflow:hidden}
+.add .head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;cursor:pointer}
+.add .head h2{margin:0;font-size:16px}
+.add .head .chev{color:var(--dim);transition:.2s}
+.add.open .head .chev{transform:rotate(180deg)}
+.add .body{display:none;padding:0 18px 18px}
+.add.open .body{display:block}
+.add .field{display:flex;gap:10px;flex-wrap:wrap}
+.add input[type=text]{flex:1;min-width:260px;background:var(--panel);border:1px solid var(--line);color:var(--txt);padding:12px 14px;border-radius:10px;font-size:15px;outline:none}
+.add input[type=text]:focus{border-color:var(--accent)}
+.add .hint{color:var(--dim);font-size:12px;margin-top:9px;line-height:1.5}
+.add .msg{padding:10px 13px;border-radius:10px;font-size:13px;margin-top:12px}
+.add .msg.err{background:rgba(248,81,73,.12);color:#f85149}
+.add .msg.ok{background:rgba(63,185,80,.12);color:var(--ok)}
+.add .msg.info{background:rgba(88,166,255,.1);color:var(--gratuit)}
+.spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+input[type=search]{flex:1;min-width:220px;background:var(--panel);border:1px solid var(--line);color:var(--txt);padding:11px 14px;border-radius:10px;font-size:15px;outline:none}
+input[type=search]:focus{border-color:var(--accent)}
+select{background:var(--panel);border:1px solid var(--line);color:var(--txt);padding:11px;border-radius:10px;font-size:14px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.chip{cursor:pointer;user-select:none;background:var(--panel);border:1px solid var(--line);color:var(--dim);padding:7px 13px;border-radius:999px;font-size:13px;transition:.15s;font-weight:600}
+.chip:hover{border-color:var(--accent)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.chip.ok.on{background:var(--ok);border-color:var(--ok)}
+.chip.gratuit.on{background:var(--gratuit);border-color:var(--gratuit)}
+.chip.deal.on{background:var(--deal);border-color:var(--deal);color:#111}
+.chip.note.on{background:var(--note);border-color:var(--note);color:#111}
+.chip.coop.on{background:var(--coop);border-color:var(--coop);color:#04211d}
+.chip.pvp.on{background:var(--pvp);border-color:var(--pvp);color:#2a0a1c}
+.chip.solo.on{background:var(--solo);border-color:var(--solo);color:#160a2e}
+
+.hero{background:linear-gradient(135deg,#1c1440,#151b2e);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:22px}
+.hero h2{margin:0 0 12px;font-size:16px}
+.hero .row{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px}
+.hero .mini{min-width:190px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:11px;text-decoration:none;color:var(--txt);transition:.15s}
+.hero .mini:hover{border-color:var(--accent);transform:translateY(-2px)}
+.hero .mini .t{font-weight:700;font-size:14px;margin-bottom:4px}
+.hero .mini .m{color:var(--dim);font-size:12px}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+thead th{position:sticky;top:0;background:var(--bg);text-align:left;padding:10px 8px;color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line);white-space:nowrap}
+thead th.sortable{cursor:pointer}
+thead th.sortable:hover{color:var(--txt)}
+thead th .arrow{color:var(--accent);margin-left:4px}
+tbody td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr:hover{background:var(--panel)}
+tbody tr.new{animation:flash 2s ease}
+@keyframes flash{0%{background:rgba(124,92,255,.35)}100%{background:transparent}}
+.game{display:flex;align-items:center;gap:11px}
+.game img{width:92px;height:43px;object-fit:cover;border-radius:6px;background:var(--panel2);flex-shrink:0}
+.game .noimg{width:92px;height:43px;border-radius:6px;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.game .info{min-width:0}
+.game .name{font-weight:700}
+.game .genre{color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px}
+.badges{display:flex;gap:4px;flex-wrap:wrap}
+.b{font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;white-space:nowrap}
+.b.ok{background:rgba(63,185,80,.15);color:var(--ok)}
+.b.gratuit{background:rgba(88,166,255,.15);color:var(--gratuit)}
+.b.deal{background:rgba(255,140,66,.15);color:var(--deal)}
+.b.note{background:rgba(245,197,24,.15);color:var(--note)}
+.b.coop{background:rgba(45,212,191,.15);color:var(--coop)}
+.b.pvp{background:rgba(244,114,182,.15);color:var(--pvp)}
+.b.solo{background:rgba(167,139,250,.15);color:var(--solo)}
+.b.dim{color:var(--dim)}
+.price{font-weight:700;white-space:nowrap}
+.price .free{color:var(--ok)}
+.note-badge{display:inline-flex;align-items:center;justify-content:center;min-width:34px;padding:3px 6px;border-radius:6px;font-weight:800;font-size:13px}
+.released{color:var(--ok);font-weight:700}
+.dim{color:var(--dim)}
+.links a{text-decoration:none;font-size:12px;font-weight:600;white-space:nowrap;margin-right:8px}
+.links a:hover{text-decoration:underline}
+.count{color:var(--dim);font-size:13px;margin:6px 2px 12px}
+@media(max-width:760px){ .game .genre,.hide-m{display:none} .game img,.game .noimg{width:64px;height:36px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>🎮 Mes jeux à jouer</h1>
+    <div class="sub">Collectés depuis Instagram, enrichis via Steam / IGDB / ITAD · <span id="gen"></span></div>
+  </div>
+  <button class="btn" id="toggleAdd">+ Ajouter un jeu</button>
+</header>
+
+<div class="stats" id="stats"></div>
+
+<div class="add" id="addPanel">
+  <div class="head" id="addHead"><h2>➕ Ajouter un jeu</h2><span class="chev">▾</span></div>
+  <div class="body">
+    <div class="field">
+      <input type="text" id="addInput" placeholder="Colle un lien Steam / YouTube / Instagram, ou tape un titre…">
+      <button class="btn" id="addBtn">Rechercher &amp; ajouter</button>
+    </div>
+    <div class="hint">Détecte le jeu depuis un lien <b>Steam</b>, une vidéo <b>YouTube</b>, un <b>reel Instagram</b>, ou un <b>titre libre</b>.</div>
+    <div class="result" id="addResult"></div>
+  </div>
+</div>
+
+<div class="hero" id="hero" style="display:none">
+  <h2>🔥 À jouer maintenant — dispo &amp; bien noté</h2>
+  <div class="row" id="heroRow"></div>
+</div>
+
+<div class="controls">
+  <input type="search" id="q" placeholder="Rechercher un titre, un genre, un univers…">
+  <select id="sort">
+    <option value="note">Trier : Note</option>
+    <option value="prix">Prix</option>
+    <option value="joueurs">Joueurs</option>
+    <option value="sortie">Sortie</option>
+    <option value="titre">Titre</option>
+  </select>
+  <button class="btn ghost dirbtn" id="dirBtn" title="Inverser le sens">▼ décroissant</button>
+</div>
+<div class="chips" id="chips">
+  <span class="chip ok" data-f="dispo">✅ Dispo</span>
+  <span class="chip gratuit" data-f="gratuit">🆓 Gratuit</span>
+  <span class="chip deal" data-f="bonPlan">💸 Bon plan</span>
+  <span class="chip note" data-f="bienNote">⭐ Bien noté</span>
+  <span class="chip coop" data-f="coop">👥 Coop</span>
+  <span class="chip pvp" data-f="pvp">⚔️ PvP</span>
+  <span class="chip solo" data-f="solo">🎯 Solo</span>
+</div>
+
+<div class="count" id="count"></div>
+<div style="overflow-x:auto">
+<table>
+  <thead><tr>
+    <th class="sortable" data-s="titre">Jeu</th>
+    <th>Statut</th>
+    <th>Modes</th>
+    <th class="sortable" data-s="prix">Prix</th>
+    <th class="sortable" data-s="note">Note</th>
+    <th class="sortable hide-m" data-s="joueurs">Joueurs</th>
+    <th class="sortable hide-m" data-s="sortie">Sortie</th>
+    <th class="hide-m">Liens</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+</div>
+</div>
+
+<script>
+let DATA = __DATA__;
+const GEN = "__GEN__";
+const API = __API__;
+document.getElementById('gen').textContent = "màj " + GEN;
+
+const noteColor = n => n>=85?'#3fb950':n>=75?'#f5c518':n>=60?'#ff8c42':'#f85149';
+const prixVal = g => (g.prix&&g.prix.meilleur!=null)?g.prix.meilleur:(g.prixSteam!=null?g.prixSteam:null);
+const noteVal = g => g.note!=null?g.note:(g.metacritic!=null?g.metacritic:(g.steamPct!=null?g.steamPct:null));
+const md = g => g.modes||{};
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+const MOIS=["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+function fmtDate(iso){
+  if(!iso)return {txt:'',released:false};
+  const p=iso.split('-');let txt;
+  if(p.length>=3)txt=(+p[2])+' '+MOIS[+p[1]-1]+' '+p[0];
+  else if(p.length===2)txt=MOIS[+p[1]-1]+' '+p[0];
+  else txt=p[0];
+  const today=new Date().toISOString().slice(0,10);
+  return {txt, released: iso<=today.slice(0,iso.length)};
+}
+function modesDetailText(g){
+  const d=g.modesDetail||{};const out=[];
+  const c=[];if(d.coopOnline)c.push('en ligne');if(d.coopCouch)c.push('écran partagé');if(d.coopLan)c.push('LAN');
+  if(c.length)out.push('Coop '+c.join('/'));
+  const p=[];if(d.pvpOnline)p.push('en ligne');if(d.pvpCouch)p.push('écran partagé');if(d.pvpLan)p.push('LAN');
+  if(p.length)out.push('PvP '+p.join('/'));
+  if(d.remotePlay)out.push('Remote Play');if(d.crossPlatform)out.push('cross-play');
+  return out.join(' · ');
+}
+const SORT_VAL={
+  titre:g=>g.titre.toLowerCase(),
+  prix:g=>{const p=prixVal(g);return p==null?Infinity:p;},
+  note:g=>{const n=noteVal(g);return n==null?-1:n;},
+  joueurs:g=>g.nbJoueursMax==null?-1:g.nbJoueursMax,
+  sortie:g=>g.sortieISO||'',
+};
+const SORT_DEFDIR={titre:1,prix:1,note:-1,joueurs:-1,sortie:-1};
+
+const state={q:'',sortKey:'note',sortDir:-1,filters:new Set(),newTitles:new Set()};
+
+function renderStats(){
+  const s=[['Jeux',DATA.length],['Dispo',DATA.filter(g=>g.dispo).length],['Gratuits',DATA.filter(g=>g.gratuit).length],
+    ['Bons plans',DATA.filter(g=>g.bonPlan).length],['Coop',DATA.filter(g=>md(g).coop).length],['PvP',DATA.filter(g=>md(g).pvp).length]];
+  document.getElementById('stats').innerHTML=s.map(([l,v])=>`<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
+}
+function renderHero(){
+  const hero=DATA.filter(g=>g.dispo&&g.bienNote).sort((a,b)=>noteVal(b)-noteVal(a)).slice(0,10);
+  const el=document.getElementById('hero');
+  if(!hero.length){el.style.display='none';return;}
+  el.style.display='';
+  document.getElementById('heroRow').innerHTML=hero.map(g=>{
+    const p=prixVal(g);const dev=g.prix&&g.prix.devise?g.prix.devise:'CHF';const pt=g.gratuit?'Gratuit':(p!=null?p+' '+dev:'—');
+    return `<a class="mini" href="${g.urlStore||g.urlSteam||'#'}" target="_blank" rel="noopener"><div class="t">${esc(g.titre)}</div><div class="m">⭐ ${noteVal(g)} · ${pt}</div></a>`;
+  }).join('');
+}
+function badges(g){
+  let h='';
+  if(g.dispo)h+='<span class="b ok">✅ Dispo</span>';
+  if(g.gratuit)h+='<span class="b gratuit">🆓 Gratuit</span>';
+  else if(g.gratuitMention)h+='<span class="b gratuit">🆓 '+esc(g.gratuitMention)+'</span>';
+  if(g.bonPlan)h+='<span class="b deal">💸 Bon plan</span>';
+  if(g.bienNote)h+='<span class="b note">⭐ Top</span>';
+  if(g.comingSoon)h+='<span class="b dim">🔜 Bientôt</span>';
+  return '<div class="badges">'+(h||'<span class="dim">—</span>')+'</div>';
+}
+function modesCell(g){
+  const m=md(g);let h='';
+  if(m.solo)h+='<span class="b solo">🎯 Solo</span>';
+  if(m.coop)h+='<span class="b coop">👥 Coop</span>';
+  if(m.pvp)h+='<span class="b pvp">⚔️ PvP</span>';
+  if(!m.solo&&!m.coop&&!m.pvp&&m.multi)h+='<span class="b dim">🌐 Multi</span>';
+  const det=modesDetailText(g);
+  return '<div class="badges">'+(h||'<span class="dim">—</span>')+'</div>'+(det?`<div class="dim" style="font-size:11px;margin-top:3px">${esc(det)}</div>`:'');
+}
+function priceCell(g){
+  if(g.gratuit)return '<span class="price"><span class="free">Gratuit</span></span>';
+  const p=prixVal(g);
+  if(p==null)return '<span class="dim">—</span>';
+  const store=g.prix&&g.prix.store?g.prix.store:'Steam';
+  const dev=g.prix&&g.prix.devise?g.prix.devise:'CHF';
+  const reduc=(g.reducPct||0)>0?` <span class="b deal">-${g.reducPct}%</span>`:'';
+  const histo=g.prix&&g.prix.plusBasHisto!=null?`<div class="dim" style="font-size:11px">bas ${g.prix.plusBasHisto} ${dev}</div>`:'';
+  return `<span class="price">${p} ${dev}${reduc}</span><div class="dim" style="font-size:11px">${esc(store)}</div>${histo}`;
+}
+function noteCell(g){
+  const n=noteVal(g);
+  if(n==null)return '<span class="dim">—</span>';
+  const src=g.noteSource||'';
+  const extra=(g.steamPct!=null&&!/Steam/.test(src))?` · 👍 ${g.steamPct}%`:'';
+  const sub=(src||extra)?`<div class="dim" style="font-size:10px;margin-top:3px">${esc(src)}${esc(extra)}</div>`:'';
+  return `<span class="note-badge" style="background:${noteColor(n)}22;color:${noteColor(n)}">${n}</span>${sub}`;
+}
+function sortieCell(g){
+  const {txt,released}=fmtDate(g.sortieISO);
+  if(!txt)return `<span class="dim">${esc(g.sortiePrec||'—')}</span>`;
+  return released?`<span class="released">${esc(txt)}</span>`:`<span class="dim">${esc(txt)}</span>`;
+}
+function gameCell(g){
+  const img=g.image?`<img src="${g.image}" loading="lazy" alt="">`:'<div class="noimg">🎮</div>';
+  return `<div class="game">${img}<div class="info"><div class="name">${esc(g.titre)}</div><div class="genre">${esc([g.genre,g.univers].filter(Boolean).join(' · '))||''}</div></div></div>`;
+}
+function linksCell(g){
+  let h='';
+  if(g.urlSteam)h+=`<a href="${g.urlSteam}" target="_blank" rel="noopener">Steam</a>`;
+  if(g.urlStore&&g.urlStore!==g.urlSteam)h+=`<a href="${g.urlStore}" target="_blank" rel="noopener">Deal</a>`;
+  if(g.reel)h+=`<a href="${g.reel}" target="_blank" rel="noopener">Reel</a>`;
+  return '<div class="links">'+(h||'<span class="dim">—</span>')+'</div>';
+}
+function updateHeaders(){
+  document.querySelectorAll('thead th[data-s]').forEach(th=>{
+    const base=th.getAttribute('data-label')||th.textContent.replace(/[▲▼]\s*$/,'').trim();
+    th.setAttribute('data-label',base);
+    th.innerHTML=base+(state.sortKey===th.dataset.s?` <span class="arrow">${state.sortDir===1?'▲':'▼'}</span>`:'');
+  });
+  document.getElementById('sort').value=state.sortKey;
+  document.getElementById('dirBtn').textContent=state.sortDir===1?'▲ croissant':'▼ décroissant';
+}
+function render(){
+  let list=DATA.slice();
+  const q=state.q.toLowerCase().trim();
+  if(q)list=list.filter(g=>(g.titre+' '+(g.genre||'')+' '+(g.univers||'')).toLowerCase().includes(q));
+  for(const f of state.filters){
+    if(f==='coop')list=list.filter(g=>md(g).coop);
+    else if(f==='pvp')list=list.filter(g=>md(g).pvp);
+    else if(f==='solo')list=list.filter(g=>md(g).solo);
+    else list=list.filter(g=>g[f]);
+  }
+  const val=SORT_VAL[state.sortKey]||SORT_VAL.note;
+  list.sort((a,b)=>{const va=val(a),vb=val(b);const r=va<vb?-1:va>vb?1:0;return r*state.sortDir||a.titre.localeCompare(b.titre);});
+  document.getElementById('count').textContent=`${list.length} jeu${list.length>1?'x':''} affiché${list.length>1?'s':''}`;
+  document.getElementById('rows').innerHTML=list.map(g=>`<tr class="${state.newTitles.has(g.titre)?'new':''}">
+    <td>${gameCell(g)}</td><td>${badges(g)}</td><td>${modesCell(g)}</td>
+    <td>${priceCell(g)}</td><td>${noteCell(g)}</td>
+    <td class="hide-m">${g.nbJoueurs?esc(g.nbJoueurs):'<span class=dim>—</span>'}</td>
+    <td class="hide-m">${sortieCell(g)}</td>
+    <td class="hide-m">${linksCell(g)}</td></tr>`).join('');
+  updateHeaders();
+}
+function renderAll(){renderStats();renderHero();render();}
+
+function setSort(key){
+  if(key===state.sortKey)state.sortDir=-state.sortDir;
+  else{state.sortKey=key;state.sortDir=SORT_DEFDIR[key];}
+  render();
+}
+document.getElementById('q').addEventListener('input',e=>{state.q=e.target.value;render();});
+document.getElementById('sort').addEventListener('change',e=>{state.sortKey=e.target.value;state.sortDir=SORT_DEFDIR[e.target.value];render();});
+document.getElementById('dirBtn').addEventListener('click',()=>{state.sortDir=-state.sortDir;render();});
+document.querySelectorAll('thead th[data-s]').forEach(th=>th.addEventListener('click',()=>setSort(th.dataset.s)));
+document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+  const f=c.dataset.f;
+  if(state.filters.has(f)){state.filters.delete(f);c.classList.remove('on');}
+  else{state.filters.add(f);c.classList.add('on');}
+  render();
+}));
+
+const addPanel=document.getElementById('addPanel');
+document.getElementById('toggleAdd').addEventListener('click',()=>{addPanel.classList.add('open');document.getElementById('addInput').focus();});
+document.getElementById('addHead').addEventListener('click',()=>addPanel.classList.toggle('open'));
+const addResult=document.getElementById('addResult');
+async function submitAdd(){
+  const input=document.getElementById('addInput').value.trim();
+  if(!input)return;
+  if(!API){addResult.innerHTML='<div class="msg info">L\\'ajout en direct nécessite le serveur. Lance <b>node server.mjs</b> puis ouvre <b>http://localhost:8787</b>.</div>';return;}
+  addResult.innerHTML='<div class="msg info"><span class="spin"></span>Détection &amp; enrichissement…</div>';
+  try{
+    const r=await fetch('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input})});
+    const j=await r.json();
+    if(!r.ok&&!j.game){addResult.innerHTML=`<div class="msg err">${esc(j.error||'Échec')}</div>`;return;}
+    const g=j.game;
+    if(j.duplicate)addResult.innerHTML=`<div class="msg info">« ${esc(g.titre)} » est déjà dans ta liste.</div>`;
+    else addResult.innerHTML=`<div class="msg ok">✅ Ajouté : <b>${esc(g.titre)}</b> (source : ${esc(j.source)})</div>`;
+    if(j.games)DATA=j.games;
+    state.newTitles=new Set([g.titre]);
+    document.getElementById('addInput').value='';
+    renderAll();
+    setTimeout(()=>{state.newTitles.clear();},2100);
+  }catch(e){addResult.innerHTML='<div class="msg err">Erreur réseau : '+esc(e.message)+'</div>';}
+}
+document.getElementById('addBtn').addEventListener('click',submitAdd);
+document.getElementById('addInput').addEventListener('keydown',e=>{if(e.key==='Enter')submitAdd();});
+
+renderAll();
+</script>
+</body>
+</html>
