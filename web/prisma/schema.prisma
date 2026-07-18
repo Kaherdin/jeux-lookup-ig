@@ -1,0 +1,49 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+model Game {
+  id             String   @id @default(cuid())
+  titre          String   @unique
+  igdbId         String?
+  steamAppId     String?
+  image          String?
+  genre          String?
+  univers        String?
+  plateformes    String[]
+  sortieISO      String?
+  sortiePrec     String?
+  dispo          Boolean  @default(false)
+  gratuit        Boolean  @default(false)
+  gratuitMention String?
+  bonPlan        Boolean  @default(false)
+  bienNote       Boolean  @default(false)
+  comingSoon     Boolean?
+  prix           Json?
+  prixSteam      Float?
+  reducPct       Int      @default(0)
+  note           Int?
+  noteSource     String?
+  metacritic     Int?
+  steamPct       Int?
+  modes          Json?
+  modesDetail    Json?
+  nbJoueurs      String?
+  nbJoueursMax   Int?
+  urlSteam       String?
+  urlStore       String?
+  urlPsn         String?
+  reel           String?
+  createur       String?
+  ajouteLe       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("game")
+}

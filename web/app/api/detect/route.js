@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { detectMany } from "../../../lib/enrich.mjs";
-import { readGames } from "../../../lib/store.mjs";
+import { getTitles } from "../../../lib/store.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +16,7 @@ export async function POST(req) {
     ITAD_KEY: process.env.ITAD_KEY,
     YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
   };
-  const existing = (await readGames()).map(g => g.titre);
+  const existing = await getTitles();
   const res = await detectMany({ text: body.text || "", playlist: body.playlist || "" }, env, existing);
   if (res.error) return NextResponse.json({ error: res.error }, { status: 400 });
   return NextResponse.json({ games: res.games });

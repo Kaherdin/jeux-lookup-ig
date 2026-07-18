@@ -1,55 +1,72 @@
 /**
- * store.mjs — persistance dual-mode.
- *  - En prod Vercel : lit/écrit Vercel Blob (token auto-détecté).
- *  - En local (pas de token) : lit/écrit data/games.json.
- * data/games.json (commité) sert de « seed » : le site fonctionne même sans Blob.
- *
- * Le token Blob est préfixé par le nom du store (ex. store « blog » → BLOG_READ_WRITE_TOKEN).
- * On détecte donc automatiquement toute variable finissant par READ_WRITE_TOKEN.
+ * store.mjs — couche data sur Prisma Postgres.
+ * Remplace l'ancien stockage Vercel Blob.
  */
-import { readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { prisma } from "./prisma.mjs";
 
-const SEED = path.join(process.cwd(), "data", "games.json");
-const BLOB_KEY = "games.json";
-
-export function blobToken() {
-  if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
-  const found = Object.entries(process.env).find(([k, v]) => /READ_WRITE_TOKEN$/.test(k) && v);
-  return found ? found[1] : null;
+// champs de la table game (mapping depuis l'objet enrichi)
+function toRow(g) {
+  const num = (v) => (v == null || v === "" ? null : Number(v));
+  const str = (v) => (v == null || v === "" ? null : String(v));
+  return {
+    titre: g.titre,
+    igdbId: str(g.igdbId),
+    steamAppId: str(g.steamAppId),
+    image: str(g.image),
+    genre: str(g.genre),
+    univers: str(g.univers),
+    plateformes: Array.isArray(g.plateformes) ? g.plateformes : [],
+    sortieISO: str(g.sortieISO),
+    sortiePrec: str(g.sortiePrec),
+    dispo: !!g.dispo,
+    gratuit: !!g.gratuit,
+    gratuitMention: str(g.gratuitMention),
+    bonPlan: !!g.bonPlan,
+    bienNote: !!g.bienNote,
+    comingSoon: g.comingSoon == null ? null : !!g.comingSoon,
+    prix: g.prix ?? null,
+    prixSteam: g.prixSteam == null ? null : Number(g.prixSteam),
+    reducPct: Number(g.reducPct || 0),
+    note: num(g.note),
+    noteSource: str(g.noteSource),
+    metacritic: num(g.metacritic),
+    steamPct: num(g.steamPct),
+    modes: g.modes ?? null,
+    modesDetail: g.modesDetail ?? null,
+    nbJoueurs: str(g.nbJoueurs),
+    nbJoueursMax: num(g.nbJoueursMax),
+    urlSteam: str(g.urlSteam),
+    urlStore: str(g.urlStore),
+    urlPsn: str(g.urlPsn),
+    reel: str(g.reel),
+    createur: str(g.createur),
+    ajouteLe: str(g.ajouteLe),
+  };
 }
 
-export function readSeed() {
-  try { return JSON.parse(readFileSync(SEED, "utf8")); } catch { return []; }
+export async function getGames() {
+  return prisma.game.findMany({ orderBy: [{ bienNote: "desc" }, { note: "desc" }, { titre: "asc" }] });
 }
 
-export async function readGames() {
-  const token = blobToken();
-  if (token) {
-    try {
-      const { list } = await import("@vercel/blob");
-      const { blobs } = await list({ prefix: BLOB_KEY, limit: 1, token });
-      if (blobs?.[0]?.url) {
-        const r = await fetch(blobs[0].url, { cache: "no-store" });
-        if (r.ok) return await r.json();
-      }
-    } catch (e) { console.error("[store] blob read:", e?.message || e); }
-    // Blob vide (avant 1re écriture) → seed commité
-    return readSeed();
-  }
-  return readSeed();
+export async function getTitles() {
+  const rows = await prisma.game.findMany({ select: { titre: true } });
+  return rows.map((r) => r.titre);
 }
 
-export async function writeGames(games) {
-  const token = blobToken();
-  if (token) {
-    const { put } = await import("@vercel/blob");
-    await put(BLOB_KEY, JSON.stringify(games), {
-      access: "public", allowOverwrite: true, addRandomSuffix: false,
-      contentType: "application/json", cacheControlMaxAge: 0, token,
-    });
-    return { store: "blob", count: games.length };
-  }
-  writeFileSync(SEED, JSON.stringify(games, null, 2));
-  return { store: "file", count: games.length };
+export async function gameExists(titre) {
+  const n = await prisma.game.count({ where: { titre: { equals: titre, mode: "insensitive" } } });
+  return n > 0;
+}
+
+/** Upsert par titre. Renvoie le jeu. */
+export async function upsertGame(g) {
+  const data = toRow(g);
+  return prisma.game.upsert({ where: { titre: data.titre }, create: data, update: data });
+}
+
+/** Crée une liste de jeux en ignorant les doublons. Renvoie le nb ajoutés. */
+export async function createGames(list) {
+  const rows = list.map(toRow).filter((r) => r.titre);
+  const res = await prisma.game.createMany({ data: rows, skipDuplicates: true });
+  return res.count;
 }
