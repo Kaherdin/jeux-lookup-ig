@@ -81,11 +81,34 @@ export function parseJoueurs(legende) {
 }
 
 // --- Steam ------------------------------------------------------------
+// Similarité de noms (coefficient de Dice sur bigrammes) — 0..1, sans dépendance.
+function bigrams(s) {
+  const t = (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const m = new Map();
+  for (let i = 0; i < t.length - 1; i++) { const g = t.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); }
+  return m;
+}
+export function dice(a, b) {
+  const x = (a || "").toLowerCase(), y = (b || "").toLowerCase();
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const A = bigrams(x), B = bigrams(y);
+  let inter = 0, sa = 0, sb = 0;
+  for (const v of A.values()) sa += v;
+  for (const v of B.values()) sb += v;
+  for (const [g, ca] of A) inter += Math.min(ca, B.get(g) || 0);
+  return sa + sb ? (2 * inter) / (sa + sb) : 0;
+}
+
 export async function steamSearch(title) {
   const u = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(title)}&l=${LANG}&cc=${COUNTRY}`;
   const j = await fetch(u).then(r => r.json()).catch(() => ({}));
-  const it = j.items?.[0];
-  return it ? { appid: String(it.id), name: it.name } : null;
+  const items = (j.items || []).slice(0, 10);
+  if (!items.length) return null;
+  // prend le meilleur match de NOM (évite un jeu obscur/à-venir mieux classé par Steam)
+  items.sort((a, b) => dice(title, b.name) - dice(title, a.name));
+  const it = items[0];
+  return { appid: String(it.id), name: it.name };
 }
 export async function steamDetails(appid) {
   const u = `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=${COUNTRY}&l=${LANG}`;
@@ -149,13 +172,17 @@ async function igdbAuth(env) {
 }
 export async function igdbLookup(title, env) {
   const tok = await igdbAuth(env); if (!tok) return null;
-  const body = `search "${title.replace(/"/g, '')}"; fields name,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,url,game_modes.slug,multiplayer_modes.*; limit 1;`;
+  const body = `search "${title.replace(/"/g, '')}"; fields name,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,url,game_modes.slug,multiplayer_modes.*; limit 10;`;
   const j = await fetch("https://api.igdb.com/v4/games", {
     method: "POST",
     headers: { "Client-ID": env.TWITCH_ID, Authorization: `Bearer ${tok}`, "Content-Type": "text/plain" },
     body,
   }).then(r => r.json()).catch(() => []);
-  const g = Array.isArray(j) ? j[0] : null; if (!g) return null;
+  const arr = Array.isArray(j) ? j : [];
+  if (!arr.length) return null;
+  // meilleur match de nom d'abord, départage par popularité (nb d'avis) → évite les spin-offs obscurs
+  arr.sort((a, b) => (dice(title, b.name) - dice(title, a.name)) || ((b.total_rating_count || 0) - (a.total_rating_count || 0)));
+  const g = arr[0];
   const modes = (g.game_modes || []).map(m => m.slug);
   // nb de joueurs max via multiplayer_modes (onlinemax / offlinemax / *coopmax)
   const mp = (g.multiplayer_modes || [])[0] || {};
@@ -323,6 +350,26 @@ async function llmGameInfo(titre, env) {
   }
 }
 
+// Correction de titre via Claude Haiku (typo → titre officiel), uniquement quand aucun match.
+async function llmCorrectTitle(raw, env) {
+  const key = env.ANTHROPIC_API_KEY;
+  if (!key || !raw) return null;
+  try {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: key });
+    const msg = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 60,
+      system: "Tu corriges des noms de jeux vidéo mal orthographiés. Réponds UNIQUEMENT par le titre officiel exact du jeu le plus probable, ou le mot NONE si ce n'est pas un jeu vidéo reconnaissable. Aucune autre parole, pas de guillemets.",
+      messages: [{ role: "user", content: `Nom saisi : "${raw}". Titre officiel exact ?` }],
+    });
+    const t = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("").trim().replace(/^["']|["']$/g, "");
+    return !t || /^none$/i.test(t) ? null : t.slice(0, 80);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Enrichit un jeu à partir d'un enregistrement partiel.
  * rec = { titre, steamAppId?, coop?, multi?, genre?, univers?, sortieISO?,
@@ -394,7 +441,11 @@ export async function enrichGame(rec, env) {
     nbJoueurs, nbJoueursMax,
     genre: rec.genre || igdb?.genres || steam?.genres || "",
     univers: rec.univers || "",
-    plateformes: igdb?.plateformes?.length ? igdb.plateformes : (rec.plateforme ? [rec.plateforme] : []),
+    plateformes: (() => {
+      let p = igdb?.plateformes?.length ? igdb.plateformes : (rec.plateforme ? [rec.plateforme] : []);
+      if (appid && !p.some((x) => /^pc$/i.test(x))) p = [...p, "PC"]; // sur Steam ⇒ au moins PC
+      return p;
+    })(),
     gratuitCsv: (rec.gratuitCsv || "").trim(),
     image: steam?.header || "",
     screenshots: steam?.screenshots || [],
@@ -476,7 +527,21 @@ export async function detectMany({ text = "", playlist = "" }, env, existingTitl
           reel: d.source === "instagram" || d.source === "youtube" ? d.input : "" },
         env
       ).catch(() => null);
-      return enriched ? { ...enriched, input: d.input, source: d.source, duplicate: false } : { ...d, duplicate: false };
+      const good = enriched && (enriched.steamAppId || enriched.igdbId) &&
+        !(d.source === "texte" && dice(inp, enriched.titre) < 0.34);
+      if (good) return { ...enriched, input: d.input, source: d.source, duplicate: false };
+      // aucun match fiable : dernier recours = correction du titre via LLM, puis nouvelle tentative
+      if (d.source === "texte" && env.ANTHROPIC_API_KEY) {
+        const fixed = await llmCorrectTitle(inp, env);
+        if (fixed && fixed.toLowerCase() !== inp.toLowerCase()) {
+          const e2 = await enrichGame({ titre: fixed }, env).catch(() => null);
+          if (e2 && (e2.steamAppId || e2.igdbId)) {
+            if (seen.has(e2.titre.toLowerCase())) return { ...e2, duplicate: true };
+            return { ...e2, input: d.input, source: d.source, duplicate: false, corrected: inp };
+          }
+        }
+      }
+      return { skip: d.input || inp };
     }));
     for (const g of batch) {
       if (!g) continue;

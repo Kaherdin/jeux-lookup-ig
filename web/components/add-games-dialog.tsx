@@ -143,9 +143,10 @@ function PreviewRow({ d, checked, onCheck }: { d: PreviewGame; checked: boolean;
       {d.image ? <img src={d.image} alt="" className="h-14 w-28 shrink-0 rounded object-cover" />
         : <span className="flex h-14 w-28 shrink-0 items-center justify-center rounded bg-muted text-lg">🎮</span>}
       <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="min-w-0 truncate font-semibold">{d.titre}</span>
           {dup && <Badge variant="secondary" className="shrink-0">déjà présent</Badge>}
+          {d.corrected && <Badge variant="outline" className="shrink-0 text-[10px]">corrigé depuis « {d.corrected} »</Badge>}
         </div>
         <div className="flex flex-wrap gap-1">
           {note != null && <Badge variant="outline">⭐ {note}</Badge>}

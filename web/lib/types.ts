@@ -64,6 +64,7 @@ export type PreviewGame = Partial<Game> & {
   source?: string;
   duplicate?: boolean;
   steamAppId?: string | null;
+  corrected?: string;
 };
 
 export type ListMeta = {
