@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { authActionClient } from "@/lib/safe-action";
 import { getListBySlug, gameExists, upsertGame, getTitles, createGames } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
+import { allow } from "@/lib/ratelimit";
 import { detectTitle, enrichGame, detectMany } from "@/lib/enrich.mjs";
 import type { PreviewGame } from "@/lib/types";
 
@@ -51,6 +52,7 @@ export const addGame = authActionClient
 export const detectGames = authActionClient
   .inputSchema(z.object({ slug: z.string(), text: z.string().optional(), playlist: z.string().optional() }))
   .action(async ({ parsedInput: { slug, text, playlist }, ctx }) => {
+    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Analyse limitée — réessaie dans une minute.");
     const list = await assertCanEdit(slug, ctx.user.id);
     const existing = await getTitles(list.id);
     const res = await detectMany({ text: text || "", playlist: playlist || "" }, env(), existing);
@@ -67,6 +69,7 @@ export const addBatch = authActionClient
     })
   )
   .action(async ({ parsedInput: { slug, items }, ctx }) => {
+    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Ajout limité — réessaie dans une minute.");
     const list = await assertCanEdit(slug, ctx.user.id);
     const added = await createGames(list.id, items as Array<Record<string, unknown> & { titre: string }>);
     revalidate(slug);
@@ -81,6 +84,7 @@ function rescanRec(g: { titre: string; steamAppId: string | null; genre: string 
 export const rescanGame = authActionClient
   .inputSchema(z.object({ slug: z.string(), titre: z.string() }))
   .action(async ({ parsedInput: { slug, titre }, ctx }) => {
+    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Rescan limité — réessaie dans une minute.");
     const list = await assertCanEdit(slug, ctx.user.id);
     const existing = await prisma.game.findFirst({ where: { listId: list.id, titre } });
     if (!existing) throw new Error("Jeu introuvable.");
@@ -93,6 +97,7 @@ export const rescanGame = authActionClient
 export const rescanList = authActionClient
   .inputSchema(z.object({ slug: z.string() }))
   .action(async ({ parsedInput: { slug }, ctx }) => {
+    if (!(await allow("heavy", `u:${ctx.user.id}`))) throw new Error("Rescan de liste limité — réessaie dans quelques minutes.");
     const list = await assertCanEdit(slug, ctx.user.id);
     const games = await prisma.game.findMany({ where: { listId: list.id } });
     let n = 0;
