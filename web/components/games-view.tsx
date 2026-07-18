@@ -1,7 +1,11 @@
 "use client";
 import { useState, useMemo } from "react";
-import { Plus } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useAction } from "next-safe-action/hooks";
+import { toast } from "sonner";
+import { Plus, RefreshCw, Loader2 } from "lucide-react";
 import type { Game, ListMeta } from "@/lib/types";
+import { rescanList } from "@/app/actions/games";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -178,6 +182,7 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
         </Select>
         <Button variant="outline" size="icon" onClick={() => setSortDir((d) => -d)} title="Inverser le sens">{sortDir === 1 ? "▲" : "▼"}</Button>
         {canEdit && <AddGamesDialog slug={list.slug} trigger={<Button><Plus className="mr-1 h-4 w-4" /> Ajouter</Button>} />}
+        {canEdit && <RescanListButton slug={list.slug} count={games.length} />}
       </div>
 
       {/* chips */}
@@ -212,7 +217,7 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
             </tr>
           </thead>
           <tbody>
-            {list2.map((g) => <Row key={g.id} g={g} />)}
+            {list2.map((g) => <Row key={g.id} g={g} slug={list.slug} canEdit={canEdit} />)}
           </tbody>
         </table>
       </div>
@@ -220,7 +225,22 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
   );
 }
 
-function Row({ g }: { g: Game }) {
+function RescanListButton({ slug, count }: { slug: string; count: number }) {
+  const router = useRouter();
+  const action = useAction(rescanList, {
+    onSuccess: ({ data }) => { toast.success(`${data?.count ?? 0} jeu(x) re-scanné(s).`); router.refresh(); },
+    onError: ({ error }) => toast.error(error.serverError ?? "Échec du re-scan."),
+  });
+  return (
+    <Button variant="outline" disabled={action.isPending}
+      title="Re-enrichit tous les jeux (comble les infos manquantes)"
+      onClick={() => { if (confirm(`Rescanner les ${count} jeux de la liste ? Cela peut prendre un moment.`)) action.execute({ slug }); }}>
+      {action.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />} Rescanner
+    </Button>
+  );
+}
+
+function Row({ g, slug, canEdit }: { g: Game; slug: string; canEdit: boolean }) {
   const m = md(g);
   const p = prixVal(g);
   const n = noteVal(g);
@@ -235,7 +255,7 @@ function Row({ g }: { g: Game }) {
           {g.image ? <img src={g.image} loading="lazy" alt="" className="h-[43px] w-[92px] shrink-0 rounded-md object-cover" />
             : <div className="flex h-[43px] w-[92px] shrink-0 items-center justify-center rounded-md bg-muted text-lg">🎮</div>}
           <div className="min-w-0">
-            <GameDetailDialog g={g} trigger={
+            <GameDetailDialog g={g} slug={slug} canEdit={canEdit} trigger={
               <button className="block max-w-[230px] truncate text-left font-bold hover:text-primary hover:underline">{g.titre}</button>
             } />
             <div className="max-w-[230px] truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>

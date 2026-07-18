@@ -1,5 +1,10 @@
 "use client";
 import type { Game } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import { useAction } from "next-safe-action/hooks";
+import { toast } from "sonner";
+import { Loader2, RefreshCw } from "lucide-react";
+import { rescanGame } from "@/app/actions/games";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,18 +13,30 @@ const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
 const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
 
-export function GameDetailDialog({ g, trigger }: { g: Game; trigger: React.ReactNode }) {
+export function GameDetailDialog({ g, trigger, slug, canEdit }: { g: Game; trigger: React.ReactNode; slug?: string; canEdit?: boolean }) {
   const p = prixVal(g);
   const n = noteVal(g);
   const dev = g.prix?.devise ?? "CHF";
   const m = g.modes ?? {};
+  const router = useRouter();
+  const rescan = useAction(rescanGame, {
+    onSuccess: () => { toast.success(`« ${g.titre} » re-scanné.`); router.refresh(); },
+    onError: ({ error }) => toast.error(error.serverError ?? "Échec du re-scan."),
+  });
 
   return (
     <Dialog>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-xl">{g.titre}</DialogTitle>
+          <DialogTitle className="flex flex-wrap items-center gap-3 text-xl">
+            {g.titre}
+            {canEdit && slug && (
+              <Button size="sm" variant="outline" disabled={rescan.isPending} onClick={() => rescan.execute({ slug, titre: g.titre })}>
+                {rescan.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />} Rescanner
+              </Button>
+            )}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">

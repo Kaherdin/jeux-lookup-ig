@@ -289,6 +289,40 @@ export async function detectTitle(input) {
   return { titre: cleanTitle(s), source: "texte" };
 }
 
+// Détecte les titres de « listicles » (Top 10, 15 Best Games…) qui ne sont pas un jeu unique.
+export function looksLikeListicle(t) {
+  const s = (t || "").trim();
+  if (!s) return false;
+  return /^\s*(top\s*)?\d+\s+(best|worst|top|greatest|amazing|awesome|new|upcoming|must|insane|craziest|meilleurs?|pires?)/i.test(s)
+    || /\btop\s*\d+\b/i.test(s)
+    || /\b\d+\s+(best|meilleurs?|jeux|games)\b/i.test(s)
+    || /\bbest\b.*\bgames\b/i.test(s);
+}
+
+// Fallback LLM (Claude Haiku 4.5) pour compléter le nb de joueurs / modes quand les APIs ne les donnent pas.
+async function llmGameInfo(titre, env) {
+  const key = env.ANTHROPIC_API_KEY;
+  if (!key || !titre) return null;
+  try {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: key });
+    const msg = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 300,
+      system: "Tu es une base de données de jeux vidéo fiable. Réponds uniquement avec du JSON valide, sans aucun texte autour.",
+      messages: [{
+        role: "user",
+        content: `Jeu vidéo : "${titre}". Combien de joueurs supporte-t-il et quels modes propose-t-il ? Réponds en JSON strict : {"joueurs": une plage réelle comme "1", "1-4", "2-8" ou null si inconnu, "solo": booléen, "coop": booléen, "pvp": booléen}. Si tu n'es pas certain qu'il s'agisse d'un vrai jeu, mets tous les champs à null.`,
+      }],
+    });
+    const txt = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
+    const m = txt.match(/\{[\s\S]*\}/);
+    return m ? JSON.parse(m[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Enrichit un jeu à partir d'un enregistrement partiel.
  * rec = { titre, steamAppId?, coop?, multi?, genre?, univers?, sortieISO?,
@@ -329,6 +363,16 @@ export async function enrichGame(rec, env) {
   // nb de joueurs : légende Insta > IGDB multiplayer_modes > existant
   let nbJoueurs = parseJoueurs(rec.legende) || rec.nbJoueurs || "";
   if (!nbJoueurs && igdb?.joueursMax) nbJoueurs = igdb.joueursMax > 1 ? `1-${igdb.joueursMax}` : "1";
+  // fallback LLM (Claude Haiku) quand ni la légende, ni Steam, ni IGDB ne donnent le nb de joueurs
+  if (!nbJoueurs && env.ANTHROPIC_API_KEY) {
+    const li = await llmGameInfo(title, env);
+    if (li) {
+      if (li.joueurs) nbJoueurs = String(li.joueurs);
+      if (!modes.solo && li.solo) modes.solo = true;
+      if (!modes.coop && li.coop) { modes.coop = true; modes.multi = true; }
+      if (!modes.pvp && li.pvp) { modes.pvp = true; modes.multi = true; }
+    }
+  }
   const mJ = nbJoueurs.match(/(\d+)\s*$/) || nbJoueurs.match(/(\d+)/);
   const nbJoueursMax = mJ ? +mJ[1] : (igdb?.joueursMax ?? null);
 
@@ -416,11 +460,15 @@ export async function detectMany({ text = "", playlist = "" }, env, existingTitl
 
   const seen = new Set(existingTitles.map(t => t.toLowerCase()));
   const out = [];
+  const skipped = [];
   const CONC = 4;
   for (let i = 0; i < inputs.length; i += CONC) {
     const batch = await Promise.all(inputs.slice(i, i + CONC).map(async (inp) => {
+      // écarte les listicles (Top 10, 15 Best Games…) : ce ne sont pas des jeux
+      if (looksLikeListicle(inp)) return { skip: inp };
       const d = await detectLight(inp, env).catch(() => null);
-      if (!d || !d.titre) return null;
+      if (!d || !d.titre) return { skip: inp };
+      if (looksLikeListicle(d.titre)) return { skip: inp };
       const key = d.titre.toLowerCase();
       if (seen.has(key)) return { ...d, duplicate: true };
       const enriched = await enrichGame(
@@ -432,9 +480,10 @@ export async function detectMany({ text = "", playlist = "" }, env, existingTitl
     }));
     for (const g of batch) {
       if (!g) continue;
+      if (g.skip) { skipped.push(g.skip); continue; }
       if (!g.duplicate) seen.add(g.titre.toLowerCase());
       out.push(g);
     }
   }
-  return { games: out };
+  return { games: out, skipped };
 }

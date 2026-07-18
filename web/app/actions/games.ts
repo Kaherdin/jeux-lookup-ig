@@ -3,6 +3,7 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { authActionClient } from "@/lib/safe-action";
 import { getListBySlug, gameExists, upsertGame, getTitles, createGames } from "@/lib/store";
+import { prisma } from "@/lib/prisma";
 import { detectTitle, enrichGame, detectMany } from "@/lib/enrich.mjs";
 import type { PreviewGame } from "@/lib/types";
 
@@ -54,7 +55,7 @@ export const detectGames = authActionClient
     const existing = await getTitles(list.id);
     const res = await detectMany({ text: text || "", playlist: playlist || "" }, env(), existing);
     if (res.error) throw new Error(res.error);
-    return { games: res.games as PreviewGame[] };
+    return { games: res.games as PreviewGame[], skipped: (res.skipped ?? []) as string[] };
   });
 
 // reçoit les jeux DÉJÀ enrichis (depuis la preview) → enregistre directement
@@ -70,4 +71,38 @@ export const addBatch = authActionClient
     const added = await createGames(list.id, items as Array<Record<string, unknown> & { titre: string }>);
     revalidate(slug);
     return { added, titres: items.map((it) => it.titre) };
+  });
+
+// re-enrichit un jeu existant (comble les infos manquantes)
+function rescanRec(g: { titre: string; steamAppId: string | null; genre: string | null; univers: string | null; nbJoueurs: string | null; reel: string | null; createur: string | null; ajouteLe: string | null }) {
+  return { titre: g.titre, steamAppId: g.steamAppId, genre: g.genre, univers: g.univers, nbJoueurs: g.nbJoueurs, reel: g.reel, createur: g.createur, ajouteLe: g.ajouteLe };
+}
+
+export const rescanGame = authActionClient
+  .inputSchema(z.object({ slug: z.string(), titre: z.string() }))
+  .action(async ({ parsedInput: { slug, titre }, ctx }) => {
+    const list = await assertCanEdit(slug, ctx.user.id);
+    const existing = await prisma.game.findFirst({ where: { listId: list.id, titre } });
+    if (!existing) throw new Error("Jeu introuvable.");
+    const enriched = await enrichGame(rescanRec(existing), env());
+    await upsertGame(list.id, enriched);
+    revalidate(slug);
+    return { titre: enriched.titre };
+  });
+
+export const rescanList = authActionClient
+  .inputSchema(z.object({ slug: z.string() }))
+  .action(async ({ parsedInput: { slug }, ctx }) => {
+    const list = await assertCanEdit(slug, ctx.user.id);
+    const games = await prisma.game.findMany({ where: { listId: list.id } });
+    let n = 0;
+    const CONC = 4;
+    for (let i = 0; i < games.length; i += CONC) {
+      await Promise.all(games.slice(i, i + CONC).map(async (g) => {
+        const e = await enrichGame(rescanRec(g), env()).catch(() => null);
+        if (e) { await upsertGame(list.id, e); n++; }
+      }));
+    }
+    revalidate(slug);
+    return { count: n };
   });
