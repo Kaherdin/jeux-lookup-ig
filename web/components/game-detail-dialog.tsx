@@ -53,9 +53,24 @@ export function GameDetailDialog({ g, trigger, slug, canEdit }: { g: Game; trigg
             {m.solo && <Badge variant="outline">Solo</Badge>}
             {m.coop && <Badge variant="outline">Coop</Badge>}
             {m.pvp && <Badge variant="outline">PvP</Badge>}
+            {g.envergure && <Badge variant="outline">{g.envergure}</Badge>}
+            {g.dureeVie && <Badge variant="outline">⏱ {g.dureeVie}</Badge>}
             {g.sortieISO && <Badge variant="outline">{g.sortieISO}</Badge>}
             {g.plateformes.map((pl, i) => <Badge key={i} variant="secondary">{pl}</Badge>)}
           </div>
+
+          {/* description */}
+          {g.description && <p className="text-sm leading-relaxed text-muted-foreground">{g.description}</p>}
+
+          {/* infos studio / production */}
+          {(g.developpeur || g.editeur || g.tailleEquipe || g.themes) && (
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+              {g.developpeur && <Info label="Développeur" value={g.developpeur} />}
+              {g.editeur && <Info label="Éditeur" value={g.editeur} />}
+              {g.tailleEquipe && <Info label="Équipe" value={g.tailleEquipe} estime />}
+              {g.themes && <Info label="Thèmes" value={g.themes} />}
+            </div>
+          )}
 
           {/* liens */}
           <div className="flex flex-wrap gap-2">
@@ -89,5 +104,17 @@ export function GameDetailDialog({ g, trigger, slug, canEdit }: { g: Game; trigg
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function Info({ label, value, estime }: { label: string; value: string; estime?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="truncate font-medium" title={value}>
+        {value}
+        {estime && <span className="ml-1 text-[10px] font-normal text-muted-foreground">(estimé)</span>}
+      </div>
+    </div>
   );
 }

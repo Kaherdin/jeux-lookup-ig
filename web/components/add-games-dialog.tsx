@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
-import { detectGames, addBatch } from "@/app/actions/games";
+import { detectGames, addBatch, searchGames } from "@/app/actions/games";
 import type { PreviewGame } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -25,17 +25,22 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
   const [detected, setDetected] = useState<PreviewGame[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
+  function showResult(games: PreviewGame[], skipped: string[], pickFirst: boolean) {
+    setDetected(games);
+    if (pickFirst) setSelected(new Set(games.length && !games[0].duplicate ? [0] : []));
+    else setSelected(new Set(games.map((g, i) => (!g.duplicate ? i : -1)).filter((i) => i >= 0)));
+    const dup = games.filter((g) => g.duplicate).length;
+    if (!games.length) toast.warning(skipped.length ? `Aucun jeu reconnu (${skipped.length} ignoré).` : "Aucun jeu trouvé.");
+    else toast.success(`${games.length} trouvé(s)${dup ? ` · ${dup} déjà présent(s)` : ""}${skipped.length ? ` · ${skipped.length} ignoré(s)` : ""}.`);
+  }
+
   const detect = useAction(detectGames, {
-    onSuccess: ({ data }) => {
-      const games = data?.games ?? [];
-      const skipped = data?.skipped ?? [];
-      setDetected(games);
-      setSelected(new Set(games.map((g, i) => (!g.duplicate ? i : -1)).filter((i) => i >= 0)));
-      const dup = games.filter((g) => g.duplicate).length;
-      if (!games.length) toast.warning(skipped.length ? `Aucun jeu reconnu (${skipped.length} ignoré·s : liste/​non-jeu).` : "Aucun jeu détecté.");
-      else toast.success(`${games.length} jeu(x) détecté(s)${dup ? ` · ${dup} déjà présent(s)` : ""}${skipped.length ? ` · ${skipped.length} ignoré(s)` : ""}.`);
-    },
+    onSuccess: ({ data }) => showResult(data?.games ?? [], data?.skipped ?? [], false),
     onError: ({ error }) => toast.error(error.serverError ?? "Échec de l'analyse."),
+  });
+  const search = useAction(searchGames, {
+    onSuccess: ({ data }) => showResult(data?.games ?? [], [], true),
+    onError: ({ error }) => toast.error(error.serverError ?? "Échec de la recherche."),
   });
 
   const batch = useAction(addBatch, {
@@ -55,6 +60,14 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
     setDetected(null);
     detect.execute({ slug, ...payload });
   }
+  function analyzeSingle() {
+    const s = single.trim();
+    if (!s) return;
+    setDetected(null);
+    const isLink = /^https?:\/\//i.test(s) || /(youtube\.com|youtu\.be|instagram\.com|steampowered\.com|store\.playstation)/i.test(s);
+    if (isLink) detect.execute({ slug, text: s });
+    else search.execute({ slug, query: s }); // titre tapé → propose plusieurs candidats
+  }
   function submitBatch() {
     if (!detected || !selected.size) return;
     batch.execute({ slug, items: [...selected].map((i) => detected[i]).filter(Boolean) });
@@ -65,7 +78,7 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
     setSelected(selected.size >= selectable.length ? new Set() : new Set(selectable));
   }
 
-  const analyzing = detect.isPending;
+  const analyzing = detect.isPending || search.isPending;
 
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
@@ -79,14 +92,14 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
           </TabsList>
 
           <TabsContent value="single" className="space-y-3 pt-2">
-            <form onSubmit={(e) => { e.preventDefault(); if (single.trim()) analyze({ text: single }); }} className="flex gap-2">
+            <form onSubmit={(e) => { e.preventDefault(); analyzeSingle(); }} className="flex gap-2">
               <Input value={single} onChange={(e) => setSingle(e.target.value)} autoFocus
                 placeholder="Lien Steam / PlayStation / YouTube / Instagram, ou un titre…" />
               <Button type="submit" disabled={analyzing || !single.trim()}>
                 {analyzing && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Analyser
               </Button>
             </form>
-            <p className="text-xs text-muted-foreground">Détecte le jeu puis t&apos;affiche tout ce qu&apos;il trouve (note, prix, joueurs, modes…) avant de l&apos;ajouter.</p>
+            <p className="text-xs text-muted-foreground">Un titre te propose plusieurs jeux (God of War 1, 2, 3…) — coche ceux à ajouter. Un lien détecte le jeu exact.</p>
           </TabsContent>
 
           <TabsContent value="multi" className="space-y-3 pt-2">
@@ -156,6 +169,8 @@ function PreviewRow({ d, checked, onCheck }: { d: PreviewGame; checked: boolean;
           {d.modes?.solo && <Badge variant="outline">Solo</Badge>}
           {d.modes?.coop && <Badge variant="outline">Coop</Badge>}
           {d.modes?.pvp && <Badge variant="outline">PvP</Badge>}
+          {d.envergure && <Badge variant="outline">{d.envergure}</Badge>}
+          {d.dureeVie && <Badge variant="outline">⏱ {d.dureeVie}</Badge>}
           {(d.plateformes ?? []).slice(0, 4).map((pl, i) => <Badge key={i} variant="secondary">{pl}</Badge>)}
         </div>
         {d.genre && <div className="truncate text-xs text-muted-foreground">{d.genre}</div>}

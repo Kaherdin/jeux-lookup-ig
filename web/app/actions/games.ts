@@ -5,7 +5,7 @@ import { authActionClient } from "@/lib/safe-action";
 import { getListBySlug, gameExists, upsertGame, getTitles, createGames } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
-import { detectTitle, enrichGame, detectMany } from "@/lib/enrich.mjs";
+import { detectTitle, enrichGame, detectMany, detectCandidates } from "@/lib/enrich.mjs";
 import type { PreviewGame } from "@/lib/types";
 
 const env = () => ({
@@ -58,6 +58,17 @@ export const detectGames = authActionClient
     const res = await detectMany({ text: text || "", playlist: playlist || "" }, env(), existing);
     if (res.error) throw new Error(res.error);
     return { games: res.games as PreviewGame[], skipped: (res.skipped ?? []) as string[] };
+  });
+
+// recherche multi-candidats pour un titre tapé (God of Wa → God of War 1/2/3…)
+export const searchGames = authActionClient
+  .inputSchema(z.object({ slug: z.string(), query: z.string() }))
+  .action(async ({ parsedInput: { slug, query }, ctx }) => {
+    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Recherche limitée — réessaie dans une minute.");
+    const list = await assertCanEdit(slug, ctx.user.id);
+    const existing = await getTitles(list.id);
+    const res = await detectCandidates(query, env(), existing);
+    return { games: res.games as PreviewGame[] };
   });
 
 // reçoit les jeux DÉJÀ enrichis (depuis la preview) → enregistre directement

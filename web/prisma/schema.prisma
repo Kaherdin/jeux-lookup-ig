@@ -122,6 +122,13 @@ model Game {
   modesDetail    Json?
   nbJoueurs      String?
   nbJoueursMax   Int?
+  themes         String?
+  developpeur    String?
+  editeur        String?
+  description    String?
+  envergure      String?
+  dureeVie       String?
+  tailleEquipe   String?
   urlSteam       String?
   urlStore       String?
   urlPsn         String?

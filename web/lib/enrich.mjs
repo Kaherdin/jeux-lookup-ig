@@ -108,6 +108,8 @@ export async function steamSearch(title) {
   // prend le meilleur match de NOM (évite un jeu obscur/à-venir mieux classé par Steam)
   items.sort((a, b) => dice(title, b.name) - dice(title, a.name));
   const it = items[0];
+  // rejette les faux matchs (asset-flips type « WarOfGods 2 » pour « God of War II ») : seuil de similarité
+  if (dice(title, it.name) < 0.6) return null;
   return { appid: String(it.id), name: it.name };
 }
 export async function steamDetails(appid) {
@@ -137,6 +139,9 @@ export async function steamDetails(appid) {
     sortieISO: iso, sortiePrec: prec,
     metacritic: d.metacritic?.score ?? null,
     genres: (d.genres || []).map(g => g.description).join(", "),
+    developpeur: (d.developers || []).slice(0, 2).join(", "),
+    editeur: (d.publishers || []).slice(0, 2).join(", "),
+    description: (d.short_description || "").slice(0, 600),
     header: d.header_image || "",
     solo: H(2),
     coop, pvp,
@@ -170,25 +175,21 @@ async function igdbAuth(env) {
   const j = await fetch(u, { method: "POST" }).then(r => r.json()).catch(() => ({}));
   return (igdbToken = j.access_token || null);
 }
-export async function igdbLookup(title, env) {
-  const tok = await igdbAuth(env); if (!tok) return null;
-  const body = `search "${title.replace(/"/g, '')}"; fields name,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,url,game_modes.slug,multiplayer_modes.*; limit 10;`;
+const IGDB_FIELDS = "name,summary,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,themes.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,url,game_modes.slug,multiplayer_modes.*";
+async function igdbQuery(body, env) {
+  const tok = await igdbAuth(env); if (!tok) return [];
   const j = await fetch("https://api.igdb.com/v4/games", {
     method: "POST",
     headers: { "Client-ID": env.TWITCH_ID, Authorization: `Bearer ${tok}`, "Content-Type": "text/plain" },
     body,
   }).then(r => r.json()).catch(() => []);
-  const arr = Array.isArray(j) ? j : [];
-  if (!arr.length) return null;
-  // meilleur match de nom d'abord, départage par popularité (nb d'avis) → évite les spin-offs obscurs
-  arr.sort((a, b) => (dice(title, b.name) - dice(title, a.name)) || ((b.total_rating_count || 0) - (a.total_rating_count || 0)));
-  const g = arr[0];
+  return Array.isArray(j) ? j : [];
+}
+// Transforme un objet jeu IGDB brut → forme normalisée.
+function igdbShape(g) {
   const modes = (g.game_modes || []).map(m => m.slug);
-  // nb de joueurs max via multiplayer_modes (onlinemax / offlinemax / *coopmax)
   const mp = (g.multiplayer_modes || [])[0] || {};
-  const joueursMax = Math.max(
-    mp.onlinemax || 0, mp.offlinemax || 0, mp.onlinecoopmax || 0, mp.offlinecoopmax || 0
-  ) || null;
+  const joueursMax = Math.max(mp.onlinemax || 0, mp.offlinemax || 0, mp.onlinecoopmax || 0, mp.offlinecoopmax || 0) || null;
   return {
     igdbId: g.id, igdbName: g.name,
     sortieISO: isoFromUnix(g.first_release_date),
@@ -201,8 +202,30 @@ export async function igdbLookup(title, env) {
     pvp: modes.some(m => /player-versus-player|battle-royale/.test(m)),
     multi: modes.includes("multiplayer") || modes.includes("co-operative"),
     joueursMax,
+    developpeur: pickCompany(g.involved_companies, "developer"),
+    editeur: pickCompany(g.involved_companies, "publisher"),
+    description: (g.summary || "").slice(0, 600),
+    themes: (g.themes || []).map(t => t.name).join(", "),
+    totalRatingCount: g.total_rating_count || 0,
     url: g.url,
   };
+}
+// Recherche par titre (fuzzy) → meilleur match par similarité de nom puis popularité.
+export async function igdbLookup(title, env) {
+  const arr = await igdbQuery(`search "${title.replace(/"/g, '')}"; fields ${IGDB_FIELDS}; limit 10;`, env);
+  if (!arr.length) return null;
+  arr.sort((a, b) => (dice(title, b.name) - dice(title, a.name)) || ((b.total_rating_count || 0) - (a.total_rating_count || 0)));
+  return igdbShape(arr[0]);
+}
+// Récupère un jeu IGDB par ID exact (pas de re-recherche → données cohérentes avec le candidat).
+export async function igdbById(id, env) {
+  const arr = await igdbQuery(`where id = ${Number(id)}; fields ${IGDB_FIELDS}; limit 1;`, env);
+  return arr.length ? igdbShape(arr[0]) : null;
+}
+// développeur / éditeur depuis involved_companies IGDB
+function pickCompany(list, kind) {
+  const c = (list || []).filter(x => x[kind]).map(x => x.company?.name).filter(Boolean);
+  return [...new Set(c)].slice(0, 2).join(", ");
 }
 
 // --- ITAD -------------------------------------------------------------
@@ -339,7 +362,7 @@ async function llmGameInfo(titre, env) {
       system: "Tu es une base de données de jeux vidéo fiable. Réponds uniquement avec du JSON valide, sans aucun texte autour.",
       messages: [{
         role: "user",
-        content: `Jeu vidéo : "${titre}". Combien de joueurs supporte-t-il et quels modes propose-t-il ? Réponds en JSON strict : {"joueurs": une plage réelle comme "1", "1-4", "2-8" ou null si inconnu, "solo": booléen, "coop": booléen, "pvp": booléen}. Si tu n'es pas certain qu'il s'agisse d'un vrai jeu, mets tous les champs à null.`,
+        content: `Jeu vidéo : "${titre}". Réponds en JSON strict : {"joueurs": plage réelle comme "1", "1-4", "2-8" ou null, "solo": bool, "coop": bool, "pvp": bool, "dureeVie": durée de vie principale approx comme "~12h", "~40h", "100h+" ou null, "envergure": "Indé" | "AA" | "AAA" | null, "equipe": taille d'équipe approx comme "solo", "petit studio", "~50", "grand studio" ou null, "developpeur": nom du studio développeur ou null, "editeur": nom de l'éditeur ou null}. Si tu n'es pas certain qu'il s'agisse d'un vrai jeu, mets TOUT à null.`,
       }],
     });
     const txt = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -370,6 +393,16 @@ async function llmCorrectTitle(raw, env) {
   }
 }
 
+// Envergure approximative (Indé / AA / AAA) depuis les genres/thèmes + popularité.
+function envergureHeuristic(igdb, reviews, steam) {
+  const g = `${igdb?.genres || ""} ${igdb?.themes || ""} ${steam?.genres || ""}`.toLowerCase();
+  if (/\bindie\b|indé/.test(g)) return "Indé";
+  const pop = Math.max(igdb?.totalRatingCount || 0, reviews?.count || 0);
+  if (pop >= 20000) return "AAA";
+  if (pop >= 2000) return "AA";
+  return "";
+}
+
 /**
  * Enrichit un jeu à partir d'un enregistrement partiel.
  * rec = { titre, steamAppId?, coop?, multi?, genre?, univers?, sortieISO?,
@@ -381,7 +414,8 @@ export async function enrichGame(rec, env) {
   if (appid && !/^\d+$/.test(appid)) appid = null;
 
   // résolution de l'appid Steam (nécessaire à Steam/ITAD) — le reste part en parallèle
-  const igdbP = igdbLookup(title, env);
+  // si un ID IGDB est fourni (candidat choisi), on l'épingle au lieu de re-chercher (données cohérentes)
+  const igdbP = rec.igdbId ? igdbById(rec.igdbId, env) : igdbLookup(title, env);
   if (!appid) { const s = await steamSearch(title); if (s) appid = s.appid; }
   const [igdb, steam, reviews, itadId] = await Promise.all([
     igdbP,
@@ -410,14 +444,21 @@ export async function enrichGame(rec, env) {
   // nb de joueurs : légende Insta > IGDB multiplayer_modes > existant
   let nbJoueurs = parseJoueurs(rec.legende) || rec.nbJoueurs || "";
   if (!nbJoueurs && igdb?.joueursMax) nbJoueurs = igdb.joueursMax > 1 ? `1-${igdb.joueursMax}` : "1";
-  // fallback LLM (Claude Haiku) quand ni la légende, ni Steam, ni IGDB ne donnent le nb de joueurs
-  if (!nbJoueurs && env.ANTHROPIC_API_KEY) {
+  // enrichissement estimé via LLM (joueurs manquants + durée de vie / envergure / équipe / studio, absents ou douteux dans les APIs)
+  let dureeVie = "", tailleEquipe = "", llmDev = "", llmEd = "";
+  let envergure = envergureHeuristic(igdb, reviews, steam);
+  if (env.ANTHROPIC_API_KEY) {
     const li = await llmGameInfo(title, env);
     if (li) {
-      if (li.joueurs) nbJoueurs = String(li.joueurs);
+      if (!nbJoueurs && li.joueurs) nbJoueurs = String(li.joueurs);
       if (!modes.solo && li.solo) modes.solo = true;
       if (!modes.coop && li.coop) { modes.coop = true; modes.multi = true; }
       if (!modes.pvp && li.pvp) { modes.pvp = true; modes.multi = true; }
+      if (li.dureeVie) dureeVie = String(li.dureeVie);
+      if (li.equipe) tailleEquipe = String(li.equipe);
+      if (li.envergure) envergure = String(li.envergure);
+      if (li.developpeur) llmDev = String(li.developpeur);
+      if (li.editeur) llmEd = String(li.editeur);
     }
   }
   const mJ = nbJoueurs.match(/(\d+)\s*$/) || nbJoueurs.match(/(\d+)/);
@@ -440,6 +481,11 @@ export async function enrichGame(rec, env) {
     multi: modes.multi ? "Oui" : (multiCsv || ""),
     nbJoueurs, nbJoueursMax,
     genre: rec.genre || igdb?.genres || steam?.genres || "",
+    themes: igdb?.themes || "",
+    developpeur: steam?.developpeur || llmDev || igdb?.developpeur || "",
+    editeur: steam?.editeur || llmEd || igdb?.editeur || "",
+    description: steam?.description || igdb?.description || "",
+    envergure, dureeVie, tailleEquipe,
     univers: rec.univers || "",
     plateformes: (() => {
       let p = igdb?.plateformes?.length ? igdb.plateformes : (rec.plateforme ? [rec.plateforme] : []);
@@ -551,4 +597,52 @@ export async function detectMany({ text = "", playlist = "" }, env, existingTitl
     }
   }
   return { games: out, skipped };
+}
+
+// Recherche IGDB brute (candidats) — renvoie [{name, total_rating_count}].
+export async function igdbSearch(query, env, limit = 15) {
+  const tok = await igdbAuth(env); if (!tok) return [];
+  const body = `search "${query.replace(/"/g, '')}"; fields name,total_rating_count; limit ${limit};`;
+  const j = await fetch("https://api.igdb.com/v4/games", {
+    method: "POST",
+    headers: { "Client-ID": env.TWITCH_ID, Authorization: `Bearer ${tok}`, "Content-Type": "text/plain" },
+    body,
+  }).then(r => r.json()).catch(() => []);
+  return Array.isArray(j) ? j : [];
+}
+
+// Recherche multi-candidats pour un titre tapé → jusqu'à `max` jeux enrichis à choisir.
+export async function detectCandidates(query, env, existingTitles = [], max = 6) {
+  const q = (query || "").trim();
+  if (!q) return { games: [] };
+  let arr = await igdbSearch(q, env, 15);
+  let corrected = "";
+  if (!arr.length && env.ANTHROPIC_API_KEY) {
+    const fixed = await llmCorrectTitle(q, env);
+    if (fixed) { const a2 = await igdbSearch(fixed, env, 15); if (a2.length) { arr = a2; corrected = q; } }
+  }
+  const seen = new Set(existingTitles.map(t => t.toLowerCase()));
+  if (!arr.length) {
+    // dernier recours : un seul match via Steam
+    const s = await steamSearch(q);
+    if (!s) return { games: [] };
+    const g = await enrichGame({ titre: s.name, steamAppId: s.appid }, env).catch(() => null);
+    if (!g || (!g.steamAppId && !g.igdbId)) return { games: [] };
+    return { games: [{ ...g, input: q, source: "texte", duplicate: seen.has(g.titre.toLowerCase()) }] };
+  }
+  // classe par similarité de nom puis popularité ; garde les meilleurs candidats
+  arr.sort((a, b) => (dice(q, b.name) - dice(q, a.name)) || ((b.total_rating_count || 0) - (a.total_rating_count || 0)));
+  const top = arr.filter(g => dice(q, g.name) >= 0.3).slice(0, max);
+  const chosen = top.length ? top : arr.slice(0, 1);
+  const out = [];
+  const CONC = 4;
+  for (let i = 0; i < chosen.length; i += CONC) {
+    const batch = await Promise.all(chosen.slice(i, i + CONC).map(async (c) => {
+      const g = await enrichGame({ titre: c.name, igdbId: c.id }, env).catch(() => null);
+      if (!g || (!g.steamAppId && !g.igdbId)) return null;
+      return { ...g, input: q, source: "texte", duplicate: seen.has(g.titre.toLowerCase()), corrected: corrected || undefined };
+    }));
+    for (const g of batch) if (g && !out.some(o => o.titre.toLowerCase() === g.titre.toLowerCase())) out.push(g);
+  }
+  return { games: out };
 }

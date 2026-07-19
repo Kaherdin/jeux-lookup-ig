@@ -52,6 +52,13 @@ export type Game = {
   modesDetail: ModesDetail;
   nbJoueurs: string | null;
   nbJoueursMax: number | null;
+  themes: string | null;
+  developpeur: string | null;
+  editeur: string | null;
+  description: string | null;
+  envergure: string | null;
+  dureeVie: string | null;
+  tailleEquipe: string | null;
   urlSteam: string | null;
   urlStore: string | null;
   urlPsn: string | null;
