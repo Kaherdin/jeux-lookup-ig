@@ -5,14 +5,17 @@ import { authActionClient } from "@/lib/safe-action";
 import { getListBySlug, gameExists, upsertGame, getTitles, createGames } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
-import { detectTitle, enrichGame, detectMany, detectCandidates } from "@/lib/enrich.mjs";
+import { detectTitle, enrichGame, detectMany, detectCandidates, igdbDiscover } from "@/lib/enrich.mjs";
 import type { PreviewGame } from "@/lib/types";
 
 const env = () => ({
   TWITCH_ID: process.env.TWITCH_ID,
   TWITCH_SECRET: process.env.TWITCH_SECRET,
   ITAD_KEY: process.env.ITAD_KEY,
+  ITAD_ID: process.env.ITAD_ID,
   YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
 });
 
 async function assertCanEdit(slug: string, userId: string) {
@@ -70,6 +73,46 @@ export const searchGames = authActionClient
     const res = await detectCandidates(query, env(), existing);
     return { games: res.games as PreviewGame[] };
   });
+
+// moteur de découverte IGDB (filtres plateforme / genre / mode / coop local / joueurs / note)
+export const discoverGames = authActionClient
+  .inputSchema(z.object({
+    platforms: z.array(z.number()).optional(),
+    genres: z.array(z.number()).optional(),
+    modes: z.array(z.number()).optional(),
+    coopLocal: z.boolean().optional(),
+    playersMin: z.number().optional(),
+    noteMin: z.number().optional(),
+    sinceYear: z.number().optional(),
+    sort: z.enum(["pop", "note", "recent"]).optional(),
+  }))
+  .action(async ({ parsedInput }) => {
+    const games = await igdbDiscover(parsedInput, env());
+    return { games: games as DiscoverGame[] };
+  });
+
+// ajoute un jeu trouvé par la découverte (épinglé par ID IGDB) → enrichit + enregistre
+export const addDiscovered = authActionClient
+  .inputSchema(z.object({ slug: z.string(), titre: z.string(), igdbId: z.number().optional() }))
+  .action(async ({ parsedInput: { slug, titre, igdbId }, ctx }) => {
+    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Ajout limité — réessaie dans une minute.");
+    const list = await assertCanEdit(slug, ctx.user.id);
+    if (await gameExists(list.id, titre)) return { titre, duplicate: true };
+    const g = await enrichGame({ titre, igdbId, ajouteLe: new Date().toISOString().slice(0, 10) }, env());
+    await upsertGame(list.id, g);
+    revalidate(slug);
+    return { titre: g.titre, duplicate: false };
+  });
+
+export type DiscoverGame = {
+  igdbId: number;
+  titre: string;
+  cover: string;
+  annee: number | null;
+  note: number | null;
+  plateformes: string[];
+  genres: string;
+};
 
 // reçoit les jeux DÉJÀ enrichis (depuis la preview) → enregistre directement
 export const addBatch = authActionClient

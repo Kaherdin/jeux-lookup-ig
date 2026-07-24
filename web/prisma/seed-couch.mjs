@@ -25,6 +25,14 @@ const TITRES = [
   "PlateUp!",
   "Human: Fall Flat",
   "Diablo IV",
+  "Lovers in a Dangerous Spacetime",
+  "Boomerang Fu",
+  "Nine Parchments",
+  "Trine 4: The Nightmare Prince",
+  "Castle Crashers",
+  "SpeedRunners",
+  "Moving Out",
+  "Overcooked! All You Can Eat",
 ];
 
 const SLUG = "canape-4-joueurs";

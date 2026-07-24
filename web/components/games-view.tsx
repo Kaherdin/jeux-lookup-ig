@@ -1,9 +1,10 @@
 "use client";
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
-import { Plus, RefreshCw, Loader2 } from "lucide-react";
+import { Plus, RefreshCw, Loader2, Search } from "lucide-react";
 import type { Game, ListMeta } from "@/lib/types";
 import { rescanList } from "@/app/actions/games";
 import { Input } from "@/components/ui/input";
@@ -184,6 +185,7 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
           </SelectContent>
         </Select>
         <Button variant="outline" size="icon" onClick={() => setSortDir((d) => -d)} title="Inverser le sens">{sortDir === 1 ? "▲" : "▼"}</Button>
+        <Button asChild variant="outline"><Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> Trouver un jeu</Link></Button>
         {canEdit && <AddGamesDialog slug={list.slug} trigger={<Button><Plus className="mr-1 h-4 w-4" /> Ajouter</Button>} />}
         {canEdit && <RescanListButton slug={list.slug} count={games.length} />}
       </div>

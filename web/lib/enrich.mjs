@@ -626,6 +626,44 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
   return { games: out, skipped };
 }
 
+// Moteur de découverte IGDB : filtre par plateforme / genre / mode / coop local / joueurs / note.
+// criteria = { platforms:[ids], genres:[ids], modes:[ids], coopLocal:bool, playersMin:int, noteMin:int, sinceYear:int, sort:"pop"|"note"|"recent" }
+export async function igdbDiscover(criteria, env, limit = 30) {
+  const c = criteria || {};
+  const w = ["game_type = 0", "parent_game = null", "version_parent = null"]; // jeux principaux (pas DLC/éditions)
+  const ids = (a) => (Array.isArray(a) ? a.filter((x) => Number.isFinite(+x)).map(Number) : []);
+  const plats = ids(c.platforms), genres = ids(c.genres), modes = ids(c.modes);
+  if (plats.length) w.push(`platforms = (${plats.join(",")})`);
+  if (genres.length) w.push(`genres = (${genres.join(",")})`);
+  if (modes.length) w.push(`game_modes = (${modes.join(",")})`);
+  if (c.coopLocal) w.push("(multiplayer_modes.splitscreen = true | game_modes = (4))");
+  const pMin = +c.playersMin || 0;
+  if (pMin > 1) {
+    w.push(c.coopLocal
+      ? `(multiplayer_modes.offlinemax >= ${pMin} | multiplayer_modes.offlinecoopmax >= ${pMin})`
+      : `(multiplayer_modes.onlinemax >= ${pMin} | multiplayer_modes.offlinemax >= ${pMin})`);
+  }
+  const nMin = +c.noteMin || 0;
+  if (nMin > 0) w.push(`total_rating >= ${nMin}`);
+  // seuil d'avis pour éviter les jeux obscurs notés 100 sur 5 avis (plus haut si on trie par note)
+  const countFloor = c.sort === "note" ? 30 : nMin > 0 ? 15 : 5;
+  w.push(`total_rating_count >= ${countFloor}`);
+  const yr = +c.sinceYear || 0;
+  if (yr > 1970) w.push(`first_release_date >= ${Math.floor(Date.UTC(yr, 0, 1) / 1000)}`);
+  const sort = c.sort === "note" ? "total_rating desc" : c.sort === "recent" ? "first_release_date desc" : "total_rating_count desc";
+  const body = `where ${w.join(" & ")}; sort ${sort}; fields name,cover.image_id,first_release_date,total_rating,total_rating_count,platforms.abbreviation,genres.name,game_modes.slug; limit ${limit};`;
+  const arr = await igdbQuery(body, env);
+  return arr.map((g) => ({
+    igdbId: g.id,
+    titre: g.name,
+    cover: g.cover?.image_id ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${g.cover.image_id}.jpg` : "",
+    annee: g.first_release_date ? new Date(g.first_release_date * 1000).getUTCFullYear() : null,
+    note: g.total_rating ? Math.round(g.total_rating) : null,
+    plateformes: (g.platforms || []).map((p) => p.abbreviation).filter(Boolean),
+    genres: (g.genres || []).map((x) => x.name).join(", "),
+  }));
+}
+
 // Recherche IGDB brute (candidats) — renvoie [{name, total_rating_count}].
 export async function igdbSearch(query, env, limit = 15) {
   const tok = await igdbAuth(env); if (!tok) return [];
