@@ -50,12 +50,12 @@ export const addGame = authActionClient
   });
 
 export const detectGames = authActionClient
-  .inputSchema(z.object({ slug: z.string(), text: z.string().optional(), playlist: z.string().optional() }))
-  .action(async ({ parsedInput: { slug, text, playlist }, ctx }) => {
+  .inputSchema(z.object({ slug: z.string(), text: z.string().optional(), playlist: z.string().optional(), extract: z.boolean().optional() }))
+  .action(async ({ parsedInput: { slug, text, playlist, extract }, ctx }) => {
     if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Analyse limitée — réessaie dans une minute.");
     const list = await assertCanEdit(slug, ctx.user.id);
     const existing = await getTitles(list.id);
-    const res = await detectMany({ text: text || "", playlist: playlist || "" }, env(), existing);
+    const res = await detectMany({ text: text || "", playlist: playlist || "", extract: !!extract }, env(), existing);
     if (res.error) throw new Error(res.error);
     return { games: res.games as PreviewGame[], skipped: (res.skipped ?? []) as string[] };
   });

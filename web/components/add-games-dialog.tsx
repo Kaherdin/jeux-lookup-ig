@@ -22,6 +22,7 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
   const [single, setSingle] = useState("");
   const [text, setText] = useState("");
   const [playlist, setPlaylist] = useState("");
+  const [extract, setExtract] = useState(false);
   const [detected, setDetected] = useState<PreviewGame[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
@@ -56,7 +57,7 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
   function reset() {
     setDetected(null); setSelected(new Set()); setSingle(""); setText(""); setPlaylist("");
   }
-  function analyze(payload: { text?: string; playlist?: string }) {
+  function analyze(payload: { text?: string; playlist?: string; extract?: boolean }) {
     setDetected(null);
     detect.execute({ slug, ...payload });
   }
@@ -103,11 +104,17 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
           </TabsContent>
 
           <TabsContent value="multi" className="space-y-3 pt-2">
-            <Textarea rows={4} value={text} onChange={(e) => setText(e.target.value)}
-              placeholder={"Un lien ou un titre par ligne :\nhttps://store.steampowered.com/app/…\nHades II\nhttps://store.playstation.com/…"} />
+            <Textarea rows={extract ? 6 : 4} value={text} onChange={(e) => setText(e.target.value)}
+              placeholder={extract
+                ? "Colle un texte / article / doc entier — l'IA en extrait les jeux automatiquement."
+                : "Un lien ou un titre par ligne :\nhttps://store.steampowered.com/app/…\nHades II\nhttps://store.playstation.com/…"} />
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <Checkbox checked={extract} onCheckedChange={(c) => setExtract(!!c)} />
+              📄 Texte libre / document — extraire les jeux automatiquement (IA)
+            </label>
             <Input value={playlist} onChange={(e) => setPlaylist(e.target.value)} placeholder="… ou une URL de playlist YouTube" />
             <Button variant="secondary" disabled={analyzing || (!text.trim() && !playlist.trim())}
-              onClick={() => analyze({ text, playlist })}>
+              onClick={() => analyze({ text, playlist, extract })}>
               {analyzing && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Analyser
             </Button>
             <p className="text-xs text-muted-foreground">Détecte plusieurs jeux d&apos;un coup et te les affiche avant ajout.</p>

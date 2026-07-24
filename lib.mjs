@@ -393,6 +393,29 @@ async function llmCorrectTitle(raw, env) {
   }
 }
 
+// Extraction des titres de jeux depuis un texte libre / document (via Claude Haiku).
+export async function llmExtractTitles(text, env) {
+  const key = env.ANTHROPIC_API_KEY;
+  if (!key || !text) return [];
+  try {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: key });
+    const msg = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 1200,
+      system: "Tu extrais les noms de JEUX VIDÉO mentionnés dans un texte. Réponds UNIQUEMENT avec un tableau JSON de titres officiels exacts (chaînes), sans doublon, dans l'ordre d'apparition, sans aucun texte autour. Si aucun jeu, réponds [].",
+      messages: [{ role: "user", content: text.slice(0, 12000) }],
+    });
+    const t = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
+    const m = t.match(/\[[\s\S]*\]/);
+    if (!m) return [];
+    const arr = JSON.parse(m[0]);
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string" && x.trim()).slice(0, 40) : [];
+  } catch {
+    return [];
+  }
+}
+
 // Envergure approximative (Indé / AA / AAA) depuis les genres/thèmes + popularité.
 function envergureHeuristic(igdb, reviews, steam) {
   const g = `${igdb?.genres || ""} ${igdb?.themes || ""} ${steam?.genres || ""}`.toLowerCase();
@@ -544,15 +567,19 @@ export async function detectLight(input, env) {
 
 // Analyse un lot d'entrées (texte multi-lignes + playlist) → jeux ENRICHIS complets (preview).
 // Chaque jeu non-doublon est entièrement enrichi (genre, joueurs, note, prix, date, screenshots…).
-export async function detectMany({ text = "", playlist = "" }, env, existingTitles = []) {
+export async function detectMany({ text = "", playlist = "", extract = false }, env, existingTitles = []) {
   const inputs = [];
   if (playlist) {
     const r = await youtubePlaylistTitles(playlist, env);
     if (r.error) return { error: r.error };
     inputs.push(...r.titles);
   }
-  if (text) inputs.push(...text.split(/\r?\n/).map(s => s.trim()).filter(Boolean));
-  if (!inputs.length) return { error: "Rien à analyser." };
+  if (text) {
+    // extract = texte libre / document → on demande au LLM d'en extraire les titres
+    if (extract) inputs.push(...(await llmExtractTitles(text, env)));
+    else inputs.push(...text.split(/\r?\n/).map(s => s.trim()).filter(Boolean));
+  }
+  if (!inputs.length) return { error: extract ? "Aucun jeu trouvé dans le texte." : "Rien à analyser." };
   if (inputs.length > 40) inputs.length = 40; // garde-fou
 
   const seen = new Set(existingTitles.map(t => t.toLowerCase()));

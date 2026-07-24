@@ -59,9 +59,10 @@ const SORT_VAL: Record<string, (g: Game) => number | string> = {
   sortie: (g) => g.sortieISO ?? "",
 };
 const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1 };
-const FILTERS: [keyof Game | "coop" | "pvp" | "solo", string][] = [
+const FILTERS: [keyof Game | "coop" | "pvp" | "solo" | "canape" | "j4", string][] = [
   ["dispo", "✅ Dispo"], ["gratuit", "🆓 Gratuit"], ["bonPlan", "💸 Bon plan"], ["bienNote", "⭐ Bien noté"],
   ["coop", "👥 Coop"], ["pvp", "⚔️ PvP"], ["solo", "🎯 Solo"],
+  ["canape", "🛋️ Canapé"], ["j4", "👨‍👩‍👧‍👦 4+ joueurs"],
 ];
 
 export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListMeta; canEdit: boolean }) {
@@ -100,6 +101,8 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
       if (f === "coop") l = l.filter((g) => md(g).coop);
       else if (f === "pvp") l = l.filter((g) => md(g).pvp);
       else if (f === "solo") l = l.filter((g) => md(g).solo);
+      else if (f === "canape") l = l.filter((g) => { const d = (g.modesDetail ?? {}) as Record<string, boolean>; return !!(d.coopCouch || d.pvpCouch || d.coopLan || d.pvpLan); });
+      else if (f === "j4") l = l.filter((g) => (g.nbJoueursMax ?? 0) >= 4);
       else l = l.filter((g) => (g as unknown as Record<string, boolean>)[f]);
     }
     const val = SORT_VAL[sortKey] ?? SORT_VAL.note;
