@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
-import { detectGames, addBatch, searchGames } from "@/app/actions/games";
+import { detectGames, addBatch, searchGames, importPsn } from "@/app/actions/games";
 import type { PreviewGame } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -23,8 +23,19 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
   const [text, setText] = useState("");
   const [playlist, setPlaylist] = useState("");
   const [extract, setExtract] = useState(false);
+  const [npsso, setNpsso] = useState("");
   const [detected, setDetected] = useState<PreviewGame[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  const psn = useAction(importPsn, {
+    onSuccess: ({ data }) => {
+      toast.success(`${data?.added ?? 0} jeu(x) importés (sur ${data?.total ?? 0}) → « Ma bibliothèque PlayStation ». Rescanne pour enrichir.`);
+      setNpsso("");
+      setOpen(false);
+      if (data?.slug) router.push(`/l/${data.slug}`); else router.refresh();
+    },
+    onError: ({ error }) => toast.error(error.serverError ?? "Échec de l'import PSN."),
+  });
 
   function showResult(games: PreviewGame[], skipped: string[], pickFirst: boolean) {
     setDetected(games);
@@ -87,9 +98,10 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
       <DialogContent className="max-w-xl overflow-hidden">
         <DialogHeader><DialogTitle>➕ Ajouter des jeux</DialogTitle></DialogHeader>
         <Tabs defaultValue="single">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="single">Un jeu</TabsTrigger>
-            <TabsTrigger value="multi">Plusieurs / playlist</TabsTrigger>
+            <TabsTrigger value="multi">Plusieurs</TabsTrigger>
+            <TabsTrigger value="psn">🎮 PSN</TabsTrigger>
           </TabsList>
 
           <TabsContent value="single" className="space-y-3 pt-2">
@@ -118,6 +130,22 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
               {analyzing && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Analyser
             </Button>
             <p className="text-xs text-muted-foreground">Détecte plusieurs jeux d&apos;un coup et te les affiche avant ajout.</p>
+          </TabsContent>
+
+          <TabsContent value="psn" className="space-y-3 pt-2">
+            <p className="text-sm text-muted-foreground">Importe ta bibliothèque PlayStation (jeux joués sur PS4/PS5).</p>
+            <Input value={npsso} onChange={(e) => setNpsso(e.target.value)} placeholder="Colle ton token NPSSO…" />
+            <Button variant="secondary" disabled={psn.isPending || npsso.trim().length < 32}
+              onClick={() => psn.execute({ npsso: npsso.trim() })}>
+              {psn.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Importer ma bibliothèque PSN
+            </Button>
+            <div className="space-y-1 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <p className="font-semibold text-foreground">Récupérer ton token NPSSO (10 sec) :</p>
+              <p>1. Connecte-toi sur <a className="underline" href="https://www.playstation.com" target="_blank" rel="noopener noreferrer">playstation.com</a></p>
+              <p>2. Dans le même navigateur, ouvre <a className="underline" href="https://ca.account.sony.com/api/v1/ssocookie" target="_blank" rel="noopener noreferrer">ce lien</a></p>
+              <p>3. Copie la valeur de <code className="rounded bg-background px-1">npsso</code> et colle-la ci-dessus.</p>
+              <p className="pt-1">Import léger (titre + jaquette + plateforme). Clique ensuite <strong>« Rescanner »</strong> pour tout enrichir (notes, prix, durée…). Le token expire après ~2 mois.</p>
+            </div>
           </TabsContent>
         </Tabs>
 
