@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Plus, Search, Library } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { getPublicLists, getUserLists } from "@/lib/store";
 import { ThemeToggle } from "./theme-toggle";
@@ -27,7 +27,15 @@ export async function SiteHeader({ currentSlug, currentName }: { currentSlug: st
             <Button variant="ghost" size="icon" aria-label="Nouvelle liste"><Plus className="h-5 w-5" /></Button>
           } />
         )}
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1">
+          {session?.user && (
+            <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
+              <Link href="/mes-jeux"><Library className="mr-1 h-4 w-4" /> Tous mes jeux</Link>
+            </Button>
+          )}
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> <span className="hidden sm:inline">Trouver</span></Link>
+          </Button>
           <ThemeToggle />
           <UserMenu user={session?.user ?? null} />
         </div>
