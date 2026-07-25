@@ -33,6 +33,7 @@ export type Game = {
   screenshots: string[];
   trailer: string | null;
   trailerThumb: string | null;
+  trailerYoutube: string | null;
   sortieISO: string | null;
   sortiePrec: string | null;
   dispo: boolean;
@@ -52,6 +53,8 @@ export type Game = {
   modesDetail: ModesDetail;
   nbJoueurs: string | null;
   nbJoueursMax: number | null;
+  joueursLocalMax: number | null;
+  joueursOnlineMax: number | null;
   themes: string | null;
   developpeur: string | null;
   editeur: string | null;

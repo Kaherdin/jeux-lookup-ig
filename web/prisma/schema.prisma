@@ -103,6 +103,7 @@ model Game {
   screenshots    String[]
   trailer        String?
   trailerThumb   String?
+  trailerYoutube String?
   sortieISO      String?
   sortiePrec     String?
   dispo          Boolean  @default(false)
@@ -122,6 +123,8 @@ model Game {
   modesDetail    Json?
   nbJoueurs      String?
   nbJoueursMax   Int?
+  joueursLocalMax Int?
+  joueursOnlineMax Int?
   themes         String?
   developpeur    String?
   editeur        String?

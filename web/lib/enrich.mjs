@@ -175,7 +175,7 @@ async function igdbAuth(env) {
   const j = await fetch(u, { method: "POST" }).then(r => r.json()).catch(() => ({}));
   return (igdbToken = j.access_token || null);
 }
-const IGDB_FIELDS = "name,summary,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,themes.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,url,game_modes.slug,multiplayer_modes.*";
+const IGDB_FIELDS = "name,summary,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,themes.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,cover.image_id,videos.video_id,url,game_modes.slug,multiplayer_modes.*";
 async function igdbQuery(body, env) {
   const tok = await igdbAuth(env); if (!tok) return [];
   const j = await fetch("https://api.igdb.com/v4/games", {
@@ -188,8 +188,15 @@ async function igdbQuery(body, env) {
 // Transforme un objet jeu IGDB brut → forme normalisée.
 function igdbShape(g) {
   const modes = (g.game_modes || []).map(m => m.slug);
-  const mp = (g.multiplayer_modes || [])[0] || {};
-  const joueursMax = Math.max(mp.onlinemax || 0, mp.offlinemax || 0, mp.onlinecoopmax || 0, mp.offlinecoopmax || 0) || null;
+  const mps = g.multiplayer_modes || [];
+  const maxOf = (k) => Math.max(0, ...mps.map(m => m[k] || 0));
+  const splitscreen = mps.some(m => m.splitscreen || m.splitscreenonline);
+  const lancoop = mps.some(m => m.lancoop);
+  // distingue précisément LOCAL (hors ligne / écran partagé) et EN LIGNE
+  let localMax = Math.max(maxOf("offlinemax"), maxOf("offlinecoopmax"));
+  if (!localMax && splitscreen) localMax = 2;
+  const onlineMax = Math.max(maxOf("onlinemax"), maxOf("onlinecoopmax")) || null;
+  const joueursMax = Math.max(localMax || 0, onlineMax || 0) || null;
   return {
     igdbId: g.id, igdbName: g.name,
     sortieISO: isoFromUnix(g.first_release_date),
@@ -201,12 +208,14 @@ function igdbShape(g) {
     coop: modes.includes("co-operative"),
     pvp: modes.some(m => /player-versus-player|battle-royale/.test(m)),
     multi: modes.includes("multiplayer") || modes.includes("co-operative"),
-    joueursMax,
+    joueursMax, localMax: localMax || null, onlineMax, splitscreen, lancoop,
     developpeur: pickCompany(g.involved_companies, "developer"),
     editeur: pickCompany(g.involved_companies, "publisher"),
     description: (g.summary || "").slice(0, 600),
     themes: (g.themes || []).map(t => t.name).join(", "),
     totalRatingCount: g.total_rating_count || 0,
+    cover: g.cover?.image_id ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${g.cover.image_id}.jpg` : "",
+    videoYoutube: (g.videos || [])[0]?.video_id || "",
     url: g.url,
   };
 }
@@ -362,7 +371,7 @@ async function llmGameInfo(titre, env) {
       system: "Tu es une base de données de jeux vidéo fiable. Réponds uniquement avec du JSON valide, sans aucun texte autour.",
       messages: [{
         role: "user",
-        content: `Jeu vidéo : "${titre}". Réponds en JSON strict : {"joueurs": plage réelle comme "1", "1-4", "2-8" ou null, "solo": bool, "coop": bool, "pvp": bool, "dureeVie": durée de vie principale approx comme "~12h", "~40h", "100h+" ou null, "envergure": "Indé" | "AA" | "AAA" | null, "equipe": taille d'équipe approx comme "solo", "petit studio", "~50", "grand studio" ou null, "developpeur": nom du studio développeur ou null, "editeur": nom de l'éditeur ou null}. Si tu n'es pas certain qu'il s'agisse d'un vrai jeu, mets TOUT à null.`,
+        content: `Jeu vidéo : "${titre}". Réponds en JSON strict : {"joueurs": plage réelle comme "1", "1-4", "2-8" ou null, "solo": bool, "coop": bool, "pvp": bool, "localMax": nb max de joueurs en LOCAL/canapé (même écran/console) ou null, "onlineMax": nb max de joueurs EN LIGNE ou null, "dureeVie": durée de vie principale approx comme "~12h", "~40h", "100h+" ou null, "envergure": "Indé" | "AA" | "AAA" | null, "equipe": taille d'équipe approx comme "solo", "petit studio", "~50", "grand studio" ou null, "developpeur": nom du studio développeur ou null, "editeur": nom de l'éditeur ou null}. Si tu n'es pas certain qu'il s'agisse d'un vrai jeu, mets TOUT à null.`,
       }],
     });
     const txt = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -468,7 +477,7 @@ export async function enrichGame(rec, env) {
   let nbJoueurs = parseJoueurs(rec.legende) || rec.nbJoueurs || "";
   if (!nbJoueurs && igdb?.joueursMax) nbJoueurs = igdb.joueursMax > 1 ? `1-${igdb.joueursMax}` : "1";
   // enrichissement estimé via LLM (joueurs manquants + durée de vie / envergure / équipe / studio, absents ou douteux dans les APIs)
-  let dureeVie = "", tailleEquipe = "", llmDev = "", llmEd = "";
+  let dureeVie = "", tailleEquipe = "", llmDev = "", llmEd = "", llmLocal = null, llmOnline = null;
   let envergure = envergureHeuristic(igdb, reviews, steam);
   if (env.ANTHROPIC_API_KEY) {
     const li = await llmGameInfo(title, env);
@@ -482,10 +491,19 @@ export async function enrichGame(rec, env) {
       if (li.envergure) envergure = String(li.envergure);
       if (li.developpeur) llmDev = String(li.developpeur);
       if (li.editeur) llmEd = String(li.editeur);
+      if (+li.localMax) llmLocal = +li.localMax;
+      if (+li.onlineMax) llmOnline = +li.onlineMax;
     }
   }
+  // joueurs LOCAL vs EN LIGNE (IGDB multiplayer_modes > LLM)
+  const joueursLocalMax = igdb?.localMax ?? llmLocal ?? null;
+  const joueursOnlineMax = igdb?.onlineMax ?? llmOnline ?? null;
+  if (!nbJoueurs && (joueursLocalMax || joueursOnlineMax)) {
+    const mx = Math.max(joueursLocalMax || 0, joueursOnlineMax || 0);
+    nbJoueurs = mx > 1 ? `1-${mx}` : "1";
+  }
   const mJ = nbJoueurs.match(/(\d+)\s*$/) || nbJoueurs.match(/(\d+)/);
-  const nbJoueursMax = mJ ? +mJ[1] : (igdb?.joueursMax ?? null);
+  const nbJoueursMax = mJ ? +mJ[1] : (igdb?.joueursMax ?? (Math.max(joueursLocalMax || 0, joueursOnlineMax || 0) || null));
 
   const g = {
     titre: title,
@@ -499,10 +517,11 @@ export async function enrichGame(rec, env) {
     noteCritique: igdb?.note ?? steam?.metacritic ?? null,
     metacritic: steam?.metacritic ?? null,
     steamPct: reviews?.pct ?? null, steamAvis: reviews?.count ?? null, steamDesc: reviews?.desc ?? "",
-    modes, modesDetail: steam?.detail || {},
+    modes,
+    modesDetail: { ...(steam?.detail || {}), splitscreen: igdb?.splitscreen || undefined, lancoop: igdb?.lancoop || undefined },
     coop: modes.coop ? "Oui" : (coopCsv || ""),
     multi: modes.multi ? "Oui" : (multiCsv || ""),
-    nbJoueurs, nbJoueursMax,
+    nbJoueurs, nbJoueursMax, joueursLocalMax, joueursOnlineMax,
     genre: rec.genre || igdb?.genres || steam?.genres || "",
     themes: igdb?.themes || "",
     developpeur: steam?.developpeur || llmDev || igdb?.developpeur || "",
@@ -516,9 +535,10 @@ export async function enrichGame(rec, env) {
       return p;
     })(),
     gratuitCsv: (rec.gratuitCsv || "").trim(),
-    image: steam?.header || "",
+    image: steam?.header || igdb?.cover || rec.image || "", // Steam > jaquette IGDB > image existante (PSN)
     screenshots: steam?.screenshots || [],
     trailer: steam?.trailer || "", trailerThumb: steam?.trailerThumb || "",
+    trailerYoutube: igdb?.videoYoutube || "", // vidéo YouTube IGDB (fallback quand pas de trailer Steam)
     urlSteam: steam?.url || "", urlIgdb: igdb?.url || "", urlStore: prix?.url || "",
     urlPsn: rec.psnUrl || "",
     reel: rec.reel || "", createur: rec.createur || "",

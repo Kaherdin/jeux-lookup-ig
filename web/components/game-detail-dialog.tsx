@@ -8,6 +8,7 @@ import { rescanGame } from "@/app/actions/games";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
@@ -17,7 +18,6 @@ export function GameDetailDialog({ g, trigger, slug, canEdit }: { g: Game; trigg
   const p = prixVal(g);
   const n = noteVal(g);
   const dev = g.prix?.devise ?? "CHF";
-  const m = g.modes ?? {};
   const router = useRouter();
   const rescan = useAction(rescanGame, {
     onSuccess: () => { toast.success(`« ${g.titre} » re-scanné.`); router.refresh(); },
@@ -49,15 +49,14 @@ export function GameDetailDialog({ g, trigger, slug, canEdit }: { g: Game; trigg
             {g.gratuit ? <Badge className="bg-emerald-600">Gratuit</Badge> : p != null && <Badge variant="secondary">{p} {dev}{g.prix?.store ? ` · ${g.prix.store}` : ""}</Badge>}
             {g.bonPlan && <Badge className="bg-orange-500 text-black">Bon plan</Badge>}
             {n != null && <Badge variant="outline">⭐ {n} {g.noteSource ? `(${g.noteSource})` : ""}</Badge>}
-            {g.nbJoueurs && <Badge variant="outline">👥 {g.nbJoueurs} joueurs</Badge>}
-            {m.solo && <Badge variant="outline">Solo</Badge>}
-            {m.coop && <Badge variant="outline">Coop</Badge>}
-            {m.pvp && <Badge variant="outline">PvP</Badge>}
             {g.envergure && <Badge variant="outline">{g.envergure}</Badge>}
             {g.dureeVie && <Badge variant="outline">⏱ {g.dureeVie}</Badge>}
             {g.sortieISO && <Badge variant="outline">{g.sortieISO}</Badge>}
             {g.plateformes.map((pl, i) => <Badge key={i} variant="secondary">{pl}</Badge>)}
           </div>
+
+          {/* multijoueur précis : local vs en ligne */}
+          <MultiInfo g={g} />
 
           {/* description */}
           {g.description && <p className="text-sm leading-relaxed text-muted-foreground">{g.description}</p>}
@@ -80,12 +79,17 @@ export function GameDetailDialog({ g, trigger, slug, canEdit }: { g: Game; trigg
             {g.reel && <Button asChild size="sm" variant="outline"><a href={g.reel} target="_blank" rel="noopener noreferrer">Reel Insta</a></Button>}
           </div>
 
-          {/* trailer */}
-          {g.trailer && (
+          {/* trailer : mp4 Steam, sinon vidéo YouTube IGDB */}
+          {g.trailer ? (
             <video controls playsInline poster={https(g.trailerThumb)} className="w-full rounded-lg" preload="none">
               <source src={https(g.trailer)} />
             </video>
-          )}
+          ) : g.trailerYoutube ? (
+            <div className="aspect-video w-full overflow-hidden rounded-lg">
+              <iframe className="h-full w-full" src={`https://www.youtube.com/embed/${g.trailerYoutube}`}
+                title="trailer" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+            </div>
+          ) : null}
 
           {/* galerie */}
           {g.screenshots?.length > 0 && (
@@ -98,12 +102,71 @@ export function GameDetailDialog({ g, trigger, slug, canEdit }: { g: Game; trigg
             </div>
           )}
 
-          {!g.trailer && !g.screenshots?.length && (
+          {!g.trailer && !g.trailerYoutube && !g.screenshots?.length && (
             <p className="text-sm text-muted-foreground">Pas de média disponible pour ce jeu.</p>
           )}
+
+          {/* debug : toutes les données brutes (repérer les trous / bugs) */}
+          <DebugPanel g={g} />
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function MultiInfo({ g }: { g: Game }) {
+  const d = (g.modesDetail ?? {}) as Record<string, boolean>;
+  const local = g.joueursLocalMax ?? null;
+  const online = g.joueursOnlineMax ?? null;
+  const hasLocal = !!(local || d.coopCouch || d.pvpCouch || d.coopLan || d.pvpLan || d.splitscreen || d.lancoop);
+  const hasOnline = !!(online || d.coopOnline || d.pvpOnline);
+  const solo = g.modes?.solo;
+  if (!solo && !hasLocal && !hasOnline && !g.nbJoueurs) return null;
+  const tags = (kind: "local" | "online") => {
+    const parts: string[] = [];
+    if (kind === "local") { if (d.coopCouch || d.coopLan) parts.push("coop"); if (d.pvpCouch || d.pvpLan) parts.push("versus"); }
+    else { if (d.coopOnline) parts.push("coop"); if (d.pvpOnline) parts.push("versus"); }
+    return parts.length ? ` · ${parts.join(" + ")}` : "";
+  };
+  return (
+    <div className="space-y-1.5 rounded-lg border p-3 text-sm">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Comment y jouer</div>
+      {solo && <div>🎯 <strong>Solo</strong></div>}
+      {hasLocal && <div>🛋️ <strong>Local / canapé</strong>{local ? ` — jusqu'à ${local} joueurs` : ""}{tags("local")}</div>}
+      {hasOnline && <div>🌐 <strong>En ligne</strong>{online ? ` — jusqu'à ${online} joueurs` : ""}{tags("online")}</div>}
+      {!hasLocal && !hasOnline && g.nbJoueurs && <div>👥 {g.nbJoueurs} joueurs</div>}
+      {d.crossPlatform && <div className="text-xs text-muted-foreground">✔ Cross-platform</div>}
+      {d.remotePlay && <div className="text-xs text-muted-foreground">✔ Remote Play Together (canapé virtuel)</div>}
+    </div>
+  );
+}
+
+function DebugPanel({ g }: { g: Game }) {
+  const rows: [string, unknown][] = [
+    ["titre", g.titre], ["genre", g.genre], ["univers", g.univers],
+    ["plateformes", g.plateformes?.join(", ")], ["sortieISO", g.sortieISO],
+    ["note", g.note], ["noteSource", g.noteSource], ["metacritic", g.metacritic], ["steamPct", g.steamPct],
+    ["prix", g.prix ? `${g.prix.meilleur} ${g.prix.devise} · ${g.prix.store}` : null], ["prixSteam", g.prixSteam],
+    ["nbJoueurs", g.nbJoueurs], ["nbJoueursMax", g.nbJoueursMax], ["joueursLocalMax", g.joueursLocalMax], ["joueursOnlineMax", g.joueursOnlineMax],
+    ["modes", JSON.stringify(g.modes)], ["modesDetail", JSON.stringify(g.modesDetail)],
+    ["developpeur", g.developpeur], ["editeur", g.editeur], ["envergure", g.envergure], ["dureeVie", g.dureeVie], ["tailleEquipe", g.tailleEquipe], ["themes", g.themes],
+    ["image", g.image], ["screenshots", g.screenshots?.length], ["trailer", g.trailer], ["trailerYoutube", g.trailerYoutube],
+    ["urlSteam", g.urlSteam], ["urlPsn", g.urlPsn], ["description", g.description],
+  ];
+  const isEmpty = (v: unknown) => v === null || v === undefined || v === "" || v === 0;
+  const missing = rows.filter(([, v]) => isEmpty(v)).map(([k]) => k);
+  return (
+    <details className="rounded-lg border text-xs">
+      <summary className="cursor-pointer select-none p-2 font-semibold">🔧 Toutes les données ({missing.length} champ·s vide·s)</summary>
+      <div className="space-y-1 border-t p-2">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex gap-2">
+            <span className="w-32 shrink-0 text-muted-foreground">{k}</span>
+            <span className={cn("min-w-0 break-words", isEmpty(v) && "italic text-destructive/70")}>{isEmpty(v) ? "— vide" : String(v)}</span>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
