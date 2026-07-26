@@ -21,7 +21,7 @@ async function main() {
     await Promise.all(games.slice(i, i + CONC).map(async (g) => {
       const e = await enrichGame({
         titre: g.titre, steamAppId: g.steamAppId, plateforme: g.plateformes?.[0] || "",
-        genre: g.genre, univers: g.univers, nbJoueurs: g.nbJoueurs, reel: g.reel,
+        image: g.image, genre: g.genre, univers: g.univers, nbJoueurs: g.nbJoueurs, reel: g.reel,
         createur: g.createur, ajouteLe: g.ajouteLe,
       }, env).catch(() => null);
       if (e && e.titre) {

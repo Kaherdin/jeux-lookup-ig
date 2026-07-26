@@ -6,6 +6,7 @@ import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createLi
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
+import { fetchSteamLibrary } from "@/lib/steam";
 import { detectTitle, enrichGame, detectMany, detectCandidates, igdbDiscover } from "@/lib/enrich.mjs";
 import type { PreviewGame } from "@/lib/types";
 
@@ -137,6 +138,31 @@ export const importPsn = authActionClient
     })).id;
     const today = new Date().toISOString().slice(0, 10);
     const rows = lib.map((g) => ({ titre: g.titre, image: g.image, plateformes: [g.plateforme], ajouteLe: today }));
+    const added = await createGames(listId, rows);
+    revalidate(slug);
+    return { added, total: lib.length, slug };
+  });
+
+// rafraîchit la bibliothèque Steam depuis le SteamID déjà mémorisé (via la connexion OpenID).
+export const importSteam = authActionClient
+  .inputSchema(z.object({}))
+  .action(async ({ ctx }) => {
+    if (!(await allow("heavy", `u:${ctx.user.id}`))) throw new Error("Import limité — réessaie dans quelques minutes.");
+    const apiKey = process.env.STEAM_WEB_API_KEY;
+    if (!apiKey) throw new Error("Steam non configuré (clé API manquante).");
+    const user = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { steamId: true } });
+    if (!user?.steamId) throw new Error("Compte Steam non lié — clique d'abord « Se connecter avec Steam ».");
+    const lib = await fetchSteamLibrary(user.steamId, apiKey);
+    if (!lib.length) throw new Error("Aucun jeu trouvé — vérifie que ton profil Steam (détails du jeu) est public.");
+    const slug = `steam-${ctx.user.id.slice(0, 8).toLowerCase()}`;
+    const existing = await getListBySlug(slug);
+    if (existing?.ownerId && existing.ownerId !== ctx.user.id) throw new Error("Conflit de liste Steam.");
+    const listId = existing?.id ?? (await createList({
+      slug, name: "🎮 Ma bibliothèque Steam", isPublic: true, ownerId: ctx.user.id,
+      description: "Jeux possédés sur Steam.",
+    })).id;
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = lib.map((g) => ({ titre: g.titre, image: g.image, plateformes: [g.plateforme], steamAppId: g.steamAppId, ajouteLe: today }));
     const added = await createGames(listId, rows);
     revalidate(slug);
     return { added, total: lib.length, slug };

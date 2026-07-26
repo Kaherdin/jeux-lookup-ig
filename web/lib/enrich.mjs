@@ -572,6 +572,18 @@ export async function youtubePlaylistTitles(url, env) {
   return { titles };
 }
 
+// Extrait les jeux mentionnés dans UNE vidéo YouTube (titre + description → LLM).
+// Gère les vidéos « Top 10 / Best of » qui listent plusieurs jeux.
+export async function youtubeVideoGames(url, env) {
+  const key = env.YOUTUBE_API_KEY;
+  const m = url.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{11})/);
+  if (!key || !m) return [];
+  const j = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${m[1]}&key=${key}`).then(r => r.json()).catch(() => ({}));
+  const s = j.items?.[0]?.snippet;
+  if (!s) return [];
+  return llmExtractTitles(`${s.title}\n${s.description || ""}`, env);
+}
+
 // Détection « légère » pour la preview : résout le titre canonique (via Steam) sans tout enrichir.
 export async function detectLight(input, env) {
   const det = await detectTitle(input);
@@ -597,9 +609,16 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
   if (text) {
     // extract = texte libre / document → on demande au LLM d'en extraire les titres
     if (extract) inputs.push(...(await llmExtractTitles(text, env)));
-    else inputs.push(...text.split(/\r?\n/).map(s => s.trim()).filter(Boolean));
+    else {
+      for (const line of text.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) {
+        // une vidéo YouTube → extrait TOUS les jeux qu'elle mentionne (titre + description)
+        if (/youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts/.test(line)) {
+          inputs.push(...(await youtubeVideoGames(line, env)));
+        } else inputs.push(line);
+      }
+    }
   }
-  if (!inputs.length) return { error: extract ? "Aucun jeu trouvé dans le texte." : "Rien à analyser." };
+  if (!inputs.length) return { error: "Aucun jeu trouvé (vérifie le lien / la vidéo)." };
   if (inputs.length > 40) inputs.length = 40; // garde-fou
 
   const seen = new Set(existingTitles.map(t => t.toLowerCase()));

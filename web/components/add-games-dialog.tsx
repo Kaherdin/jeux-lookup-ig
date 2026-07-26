@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
-import { detectGames, addBatch, searchGames, importPsn } from "@/app/actions/games";
+import { detectGames, addBatch, searchGames, importPsn, importSteam } from "@/app/actions/games";
 import type { PreviewGame } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -35,6 +35,15 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
       if (data?.slug) router.push(`/l/${data.slug}`); else router.refresh();
     },
     onError: ({ error }) => toast.error(error.serverError ?? "Échec de l'import PSN."),
+  });
+
+  const steam = useAction(importSteam, {
+    onSuccess: ({ data }) => {
+      toast.success(`${data?.added ?? 0} jeu(x) importés (sur ${data?.total ?? 0}) → « Ma bibliothèque Steam ». Rescanne pour enrichir.`);
+      setOpen(false);
+      if (data?.slug) router.push(`/l/${data.slug}`); else router.refresh();
+    },
+    onError: ({ error }) => toast.error(error.serverError ?? "Échec du rafraîchissement Steam."),
   });
 
   function showResult(games: PreviewGame[], skipped: string[], pickFirst: boolean) {
@@ -98,10 +107,11 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
       <DialogContent className="max-w-xl overflow-hidden">
         <DialogHeader><DialogTitle>➕ Ajouter des jeux</DialogTitle></DialogHeader>
         <Tabs defaultValue="single">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="single">Un jeu</TabsTrigger>
             <TabsTrigger value="multi">Plusieurs</TabsTrigger>
             <TabsTrigger value="psn">🎮 PSN</TabsTrigger>
+            <TabsTrigger value="steam">Steam</TabsTrigger>
           </TabsList>
 
           <TabsContent value="single" className="space-y-3 pt-2">
@@ -129,7 +139,7 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
               onClick={() => analyze({ text, playlist, extract })}>
               {analyzing && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Analyser
             </Button>
-            <p className="text-xs text-muted-foreground">Détecte plusieurs jeux d&apos;un coup et te les affiche avant ajout.</p>
+            <p className="text-xs text-muted-foreground">Détecte plusieurs jeux d&apos;un coup. Une <strong>vidéo YouTube</strong> (même « Top 10 ») → extrait tous les jeux qu&apos;elle mentionne.</p>
           </TabsContent>
 
           <TabsContent value="psn" className="space-y-3 pt-2">
@@ -145,6 +155,22 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
               <p>2. Dans le même navigateur, ouvre <a className="underline" href="https://ca.account.sony.com/api/v1/ssocookie" target="_blank" rel="noopener noreferrer">ce lien</a></p>
               <p>3. Copie la valeur de <code className="rounded bg-background px-1">npsso</code> et colle-la ci-dessus.</p>
               <p className="pt-1">Import léger (titre + jaquette + plateforme). Clique ensuite <strong>« Rescanner »</strong> pour tout enrichir (notes, prix, durée…). Le token expire après ~2 mois.</p>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="steam" className="space-y-3 pt-2">
+            <p className="text-sm text-muted-foreground">Importe ta bibliothèque Steam (jeux possédés). Connecte-toi via Steam — aucun mot de passe ne transite par l&apos;app.</p>
+            <Button asChild variant="secondary" className="w-full">
+              <a href="/api/steam/login">🎮 Se connecter avec Steam</a>
+            </Button>
+            <Button variant="ghost" size="sm" className="w-full" disabled={steam.isPending}
+              onClick={() => steam.execute({})}>
+              {steam.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} 🔄 Rafraîchir (si déjà connecté)
+            </Button>
+            <div className="space-y-1 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <p className="font-semibold text-foreground">À savoir :</p>
+              <p>Ton profil Steam doit être <strong>public</strong> (Steam → Profil → Modifier le profil → Confidentialité → « Détails du jeu » = Public).</p>
+              <p className="pt-1">Import léger (titre + jaquette + appid). Clique ensuite <strong>« Rescanner »</strong> pour enrichir (notes, prix, coop, durée…). L&apos;appid étant récupéré directement, l&apos;enrichissement est très fiable.</p>
             </div>
           </TabsContent>
         </Tabs>
