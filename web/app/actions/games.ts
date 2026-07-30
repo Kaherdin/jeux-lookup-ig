@@ -17,7 +17,15 @@ const env = () => ({
   ITAD_ID: process.env.ITAD_ID,
   YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
+  // secours automatique quand Anthropic est indisponible (quota, panne)
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  OPENAI_MODEL: process.env.OPENAI_MODEL,
   GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+  // jeton oEmbed Meta : sans lui, les légendes Instagram sont illisibles
+  INSTAGRAM_OEMBED_TOKEN: process.env.INSTAGRAM_OEMBED_TOKEN,
+  META_APP_ID: process.env.META_APP_ID,
+  META_CLIENT_TOKEN: process.env.META_CLIENT_TOKEN,
 });
 
 async function assertCanEdit(slug: string, userId: string) {
@@ -36,8 +44,8 @@ export const addGame = authActionClient
   .inputSchema(z.object({ slug: z.string(), input: z.string().min(1) }))
   .action(async ({ parsedInput: { slug, input }, ctx }) => {
     const list = await assertCanEdit(slug, ctx.user.id);
-    const det = await detectTitle(input.trim());
-    if (!det.titre) throw new Error("Impossible de détecter un titre. Tape le nom du jeu directement.");
+    const det = await detectTitle(input.trim(), env());
+    if (!det.titre) throw new Error(det.error ?? "Impossible de détecter un titre. Tape le nom du jeu directement.");
     if (await gameExists(list.id, det.titre)) return { duplicate: true, titre: det.titre };
     const g = await enrichGame(
       {
@@ -62,7 +70,11 @@ export const detectGames = authActionClient
     const existing = await getTitles(list.id);
     const res = await detectMany({ text: text || "", playlist: playlist || "", extract: !!extract }, env(), existing);
     if (res.error) throw new Error(res.error);
-    return { games: res.games as PreviewGame[], skipped: (res.skipped ?? []) as string[] };
+    return {
+      games: res.games as PreviewGame[],
+      skipped: (res.skipped ?? []) as string[],
+      notes: (res.notes ?? []) as string[],
+    };
   });
 
 // recherche multi-candidats pour un titre tapé (God of Wa → God of War 1/2/3…)

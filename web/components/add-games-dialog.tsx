@@ -46,17 +46,19 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
     onError: ({ error }) => toast.error(error.serverError ?? "Échec du rafraîchissement Steam."),
   });
 
-  function showResult(games: PreviewGame[], skipped: string[], pickFirst: boolean) {
+  function showResult(games: PreviewGame[], skipped: string[], pickFirst: boolean, notes: string[] = []) {
     setDetected(games);
     if (pickFirst) setSelected(new Set(games.length && !games[0].duplicate ? [0] : []));
     else setSelected(new Set(games.map((g, i) => (!g.duplicate ? i : -1)).filter((i) => i >= 0)));
     const dup = games.filter((g) => g.duplicate).length;
-    if (!games.length) toast.warning(skipped.length ? `Aucun jeu reconnu (${skipped.length} ignoré).` : "Aucun jeu trouvé.");
+    // ex. « Instagram ne laisse plus lire ses publications » : à dire, sinon l'échec est incompréhensible
+    for (const n of notes) toast.warning(n, { duration: 9000 });
+    if (!games.length) { if (!notes.length) toast.warning(skipped.length ? `Aucun jeu reconnu (${skipped.length} ignoré).` : "Aucun jeu trouvé."); }
     else toast.success(`${games.length} trouvé(s)${dup ? ` · ${dup} déjà présent(s)` : ""}${skipped.length ? ` · ${skipped.length} ignoré(s)` : ""}.`);
   }
 
   const detect = useAction(detectGames, {
-    onSuccess: ({ data }) => showResult(data?.games ?? [], data?.skipped ?? [], false),
+    onSuccess: ({ data }) => showResult(data?.games ?? [], data?.skipped ?? [], false, data?.notes ?? []),
     onError: ({ error }) => toast.error(error.serverError ?? "Échec de l'analyse."),
   });
   const search = useAction(searchGames, {

@@ -285,13 +285,19 @@ function cleanTitle(raw) {
     // enlève les parenthèses/crochets bruités : (Official Video), [4K], (Launch Trailer)…
     .replace(new RegExp(`[\\(\\[][^\\)\\]]*(?:${NOISE})[^\\)\\]]*[\\)\\]]`, "gi"), "")
     // coupe à partir d'un séparateur suivi d'un mot bruité : "Nom - Official Trailer"
-    .replace(new RegExp(`\\s*[-–|:]\\s*(?:${NOISE}).*`, "i"), "")
+    // (inclut le tiret cadratin « — », très courant dans les titres de trailers)
+    .replace(new RegExp(`\\s*[-–—|:]\\s*(?:${NOISE}).*`, "i"), "")
     // coupe un mot bruité isolé en fin : "Nom Gameplay"
     .replace(new RegExp(`\\b(?:${NOISE})\\b.*`, "i"), "")
     .replace(/[#|].*$/, "")
-    .replace(/\s+\d{4}$/, "")
+    // année de publication accolée en fin (« … 2024 ») — mais jamais une année qui fait
+    // partie du titre : 2077 (Cyberpunk), 2142, 3000… ne sont pas des dates de vidéo.
+    .replace(/\s+(\d{4})$/, (s, y) => (+y >= 2000 && +y <= new Date().getFullYear() + 2 ? "" : s))
     .replace(/["""'']/g, "")
     .replace(/\s{2,}/g, " ")
+    // ponctuation de séparation restée orpheline en bout de titre
+    .replace(/[\s\-–—|:,.]+$/, "")
+    .replace(/^[\s\-–—|:,.]+/, "")
     .trim();
   return t.slice(0, 80);
 }
@@ -305,7 +311,7 @@ function metaContent(html, prop) {
   return m ? m[1] : "";
 }
 /** Retourne {titre, steamAppId?, source} détecté depuis un lien ou du texte. */
-export async function detectTitle(input) {
+export async function detectTitle(input, env = {}) {
   const s = (input || "").trim();
   if (!s) return { titre: "", source: "vide" };
 
@@ -325,24 +331,16 @@ export async function detectTitle(input) {
       .replace(/PlayStation.*/i, "").trim();
     return { titre: cleanTitle(t), source: "psn", psnUrl: s };
   }
-  // YouTube (oEmbed → titre vidéo → nettoyage)
+  // YouTube — même logique que l'ajout multiple : un trailer donne son jeu,
+  // une sélection donne son premier jeu (utiliser l'onglet « Plusieurs » pour tous les avoir).
   if (/youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts/.test(s)) {
-    const j = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(s)}&format=json`)
-      .then(r => r.ok ? r.json() : null).catch(() => null);
-    return { titre: cleanTitle(j?.title || ""), source: "youtube", rawTitle: j?.title || "" };
+    const r = await youtubeVideoGames(s, env).catch(() => ({ games: [] }));
+    return { titre: (r.games[0] || "").slice(0, 80), source: "youtube", rawTitle: r.titreVideo || "", multi: r.multi, autres: r.games.slice(1), error: r.error };
   }
-  // Instagram (og:title / og:description best-effort)
+  // Instagram — la légende n'est lisible qu'avec un jeton oEmbed officiel (voir instagramGames)
   if (/instagram\.com\//.test(s)) {
-    const html = await fetchText(s);
-    const title = metaContent(html, "og:title");
-    const desc = metaContent(html, "og:description");
-    // og:title Insta = "Username on Instagram: caption" ; on tente la caption
-    let guess = "";
-    const cap = (title.split(/ on Instagram[:]?/i)[1] || desc || "").trim();
-    // cherche un motif "Name of the game: X" fréquent dans les reels
-    const gm = cap.match(/(?:nom du jeu|game name|it['’]s called|jeu\s*:)\s*[:\-]?\s*([^\n.#]{2,60})/i);
-    guess = gm ? gm[1] : cleanTitle(cap.split(/[\n#]/)[0] || "");
-    return { titre: guess.trim().slice(0, 80), source: "instagram", rawTitle: cap.slice(0, 140) };
+    const r = await instagramGames(s, env).catch(() => ({ games: [] }));
+    return { titre: (r.games[0] || "").slice(0, 80), source: "instagram", rawTitle: (r.caption || "").slice(0, 140), error: r.error };
   }
   // texte libre = titre
   return { titre: cleanTitle(s), source: "texte" };
@@ -358,71 +356,110 @@ export function looksLikeListicle(t) {
     || /\bbest\b.*\bgames\b/i.test(s);
 }
 
-// Fallback LLM (Claude Haiku 4.5) pour compléter le nb de joueurs / modes quand les APIs ne les donnent pas.
+// --- accès LLM (Claude, puis OpenAI en secours) ------------------------
+// Un seul point d'entrée : si la clé Anthropic manque ou que l'appel échoue
+// (quota épuisé, panne…), on rebascule automatiquement sur OpenAI. Sans quoi
+// toute la détection (extraction de jeux, correction de titre) tombe en panne
+// silencieusement dès qu'un fournisseur est indisponible.
+export const OPENAI_MODEL_DEFAUT = "gpt-5.4-mini";
+
+async function llmText({ system, user, maxTokens = 800, env }) {
+  if (env.ANTHROPIC_API_KEY) {
+    try {
+      const { default: Anthropic } = await import("@anthropic-ai/sdk");
+      const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+      const msg = await client.messages.create({
+        model: env.ANTHROPIC_MODEL || "claude-haiku-4-5",
+        max_tokens: maxTokens, system,
+        messages: [{ role: "user", content: user }],
+      });
+      const t = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+      if (t) return t;
+    } catch {
+      /* on tente le fournisseur suivant */
+    }
+  }
+  if (env.OPENAI_API_KEY) {
+    try {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: env.OPENAI_MODEL || OPENAI_MODEL_DEFAUT,
+          max_completion_tokens: Math.max(maxTokens, 1500), // marge pour les tokens de raisonnement
+          messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        }),
+      });
+      const j = await r.json();
+      if (j.error) return null;
+      return (j.choices?.[0]?.message?.content || "").trim() || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+export const hasLLM = (env) => !!(env?.ANTHROPIC_API_KEY || env?.OPENAI_API_KEY);
+function parseJson(txt, ouvrant = "{", fermant = "}") {
+  if (!txt) return null;
+  const m = txt.match(ouvrant === "[" ? /\[[\s\S]*\]/ : /\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+// Fallback LLM pour compléter le nb de joueurs / modes quand les APIs ne les donnent pas.
 async function llmGameInfo(titre, env) {
-  const key = env.ANTHROPIC_API_KEY;
-  if (!key || !titre) return null;
-  try {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    const client = new Anthropic({ apiKey: key });
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 300,
-      system: "Tu es une base de données de jeux vidéo fiable. Réponds uniquement avec du JSON valide, sans aucun texte autour.",
-      messages: [{
-        role: "user",
-        content: `Jeu vidéo : "${titre}". Réponds en JSON strict : {"joueurs": plage réelle comme "1", "1-4", "2-8" ou null, "solo": bool, "coop": bool, "pvp": bool, "localMax": nb max de joueurs en LOCAL/canapé (même écran/console) ou null, "onlineMax": nb max de joueurs EN LIGNE ou null, "dureeVie": durée de vie principale approx comme "~12h", "~40h", "100h+" ou null, "envergure": "Indé" | "AA" | "AAA" | null, "equipe": taille d'équipe approx comme "solo", "petit studio", "~50", "grand studio" ou null, "developpeur": nom du studio développeur ou null, "editeur": nom de l'éditeur ou null}. Si tu n'es pas certain qu'il s'agisse d'un vrai jeu, mets TOUT à null.`,
-      }],
-    });
-    const txt = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
-    const m = txt.match(/\{[\s\S]*\}/);
-    return m ? JSON.parse(m[0]) : null;
-  } catch {
-    return null;
-  }
+  if (!titre || !hasLLM(env)) return null;
+  const txt = await llmText({
+    env, maxTokens: 300,
+    system: "Tu es une base de données de jeux vidéo fiable. Réponds uniquement avec du JSON valide, sans aucun texte autour.",
+    user: `Jeu vidéo : "${titre}". Réponds en JSON strict : {"joueurs": plage réelle comme "1", "1-4", "2-8" ou null, "solo": bool, "coop": bool, "pvp": bool, "localMax": nb max de joueurs en LOCAL/canapé (même écran/console) ou null, "onlineMax": nb max de joueurs EN LIGNE ou null, "dureeVie": durée de vie principale approx comme "~12h", "~40h", "100h+" ou null, "envergure": "Indé" | "AA" | "AAA" | null, "equipe": taille d'équipe approx comme "solo", "petit studio", "~50", "grand studio" ou null, "developpeur": nom du studio développeur ou null, "editeur": nom de l'éditeur ou null}. Si tu n'es pas certain qu'il s'agisse d'un vrai jeu, mets TOUT à null.`,
+  });
+  return parseJson(txt);
 }
 
-// Correction de titre via Claude Haiku (typo → titre officiel), uniquement quand aucun match.
+// Correction de titre (typo → titre officiel), uniquement quand aucun match.
 async function llmCorrectTitle(raw, env) {
-  const key = env.ANTHROPIC_API_KEY;
-  if (!key || !raw) return null;
-  try {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    const client = new Anthropic({ apiKey: key });
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 60,
-      system: "Tu corriges des noms de jeux vidéo mal orthographiés. Réponds UNIQUEMENT par le titre officiel exact du jeu le plus probable, ou le mot NONE si ce n'est pas un jeu vidéo reconnaissable. Aucune autre parole, pas de guillemets.",
-      messages: [{ role: "user", content: `Nom saisi : "${raw}". Titre officiel exact ?` }],
-    });
-    const t = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("").trim().replace(/^["']|["']$/g, "");
-    return !t || /^none$/i.test(t) ? null : t.slice(0, 80);
-  } catch {
-    return null;
-  }
+  if (!raw || !hasLLM(env)) return null;
+  const t = (await llmText({
+    env, maxTokens: 60,
+    system: "Tu corriges des noms de jeux vidéo mal orthographiés. Réponds UNIQUEMENT par le titre officiel exact du jeu le plus probable, ou le mot NONE si ce n'est pas un jeu vidéo reconnaissable. Aucune autre parole, pas de guillemets.",
+    user: `Nom saisi : "${raw}". Titre officiel exact ?`,
+  }))?.replace(/^["']|["']$/g, "").trim();
+  return !t || /^none$/i.test(t) ? null : t.slice(0, 80);
 }
 
-// Extraction des titres de jeux depuis un texte libre / document (via Claude Haiku).
+// Extraction des titres de jeux depuis un texte libre / document.
 export async function llmExtractTitles(text, env) {
-  const key = env.ANTHROPIC_API_KEY;
-  if (!key || !text) return [];
-  try {
-    const { default: Anthropic } = await import("@anthropic-ai/sdk");
-    const client = new Anthropic({ apiKey: key });
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 1200,
-      system: "Tu extrais les noms de JEUX VIDÉO mentionnés dans un texte. Réponds UNIQUEMENT avec un tableau JSON de titres officiels exacts (chaînes), sans doublon, dans l'ordre d'apparition, sans aucun texte autour. Si aucun jeu, réponds [].",
-      messages: [{ role: "user", content: text.slice(0, 12000) }],
-    });
-    const t = (msg.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
-    const m = t.match(/\[[\s\S]*\]/);
-    if (!m) return [];
-    const arr = JSON.parse(m[0]);
-    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string" && x.trim()).slice(0, 40) : [];
-  } catch {
-    return [];
-  }
+  if (!text || !hasLLM(env)) return [];
+  const txt = await llmText({
+    env, maxTokens: 1200,
+    system: "Tu extrais les noms de JEUX VIDÉO mentionnés dans un texte. Réponds UNIQUEMENT avec un tableau JSON de titres officiels exacts (chaînes), sans doublon, dans l'ordre d'apparition, sans aucun texte autour. Si aucun jeu, réponds [].",
+    user: text.slice(0, 12000),
+  });
+  const arr = parseJson(txt, "[");
+  return Array.isArray(arr) ? arr.filter((x) => typeof x === "string" && x.trim()).slice(0, 40) : [];
+}
+
+// Extraction ciblée « contenu d'une publication » (vidéo YouTube, post Instagram).
+// Différence clé avec llmExtractTitles : on ne veut QUE les jeux réellement présentés,
+// pas ceux qui traînent dans les liens promo, les hashtags de chaîne ou les sponsors.
+export async function llmExtractGamesFromPost({ titre, texte, source }, env) {
+  if (!hasLLM(env)) return [];
+  const txt = await llmText({
+    env, maxTokens: 1200,
+    system: `Tu extrais les JEUX VIDÉO réellement présentés dans une publication ${source}.
+RÈGLES :
+- Ne retiens que les jeux qui font l'objet de la publication (ceux montrés / listés / recommandés).
+- IGNORE : les liens promotionnels, les autres vidéos de la chaîne, les sponsors, les noms de chaînes,
+  de studios, de consoles, de logiciels, les hashtags de marque et les jeux cités en simple comparaison.
+- Rends les titres OFFICIELS exacts (corrige les abréviations : « BOTW » → « The Legend of Zelda: Breath of the Wild »).
+- Ordre d'apparition, sans doublon.
+Réponds UNIQUEMENT par un tableau JSON de chaînes. Aucun jeu → [].`,
+    user: `Titre : ${titre || "(aucun)"}\n\nTexte :\n${(texte || "").slice(0, 8000)}`,
+  });
+  const arr = parseJson(txt, "[");
+  return Array.isArray(arr) ? arr.filter((x) => typeof x === "string" && x.trim()).slice(0, 40) : [];
 }
 
 // Envergure approximative (Indé / AA / AAA) depuis les genres/thèmes + popularité.
@@ -507,6 +544,9 @@ export async function enrichGame(rec, env) {
 
   const g = {
     titre: title,
+    // noms officiels des sources : servent à vérifier qu'on a bien matché le bon jeu
+    // (sans eux, comparer `titre` au titre saisi revient à le comparer à lui-même)
+    steamName: steam?.steamName || "", igdbName: igdb?.igdbName || "",
     igdbId: igdb?.igdbId ?? "", steamAppId: appid ?? "",
     sortieISO: igdb?.sortieISO || steam?.sortieISO || rec.sortieISO || "",
     sortiePrec: igdb?.sortieISO ? "jour (IGDB)" : steam?.sortiePrec || rec.sortiePrec || "",
@@ -572,21 +612,98 @@ export async function youtubePlaylistTitles(url, env) {
   return { titles };
 }
 
-// Extrait les jeux mentionnés dans UNE vidéo YouTube (titre + description → LLM).
-// Gère les vidéos « Top 10 / Best of » qui listent plusieurs jeux.
+// Nettoie une description de vidéo : les liens, hashtags et blocs « réseaux sociaux »
+// noient le LLM et lui font inventer des jeux à partir des URLs promotionnelles.
+export function cleanDescription(txt) {
+  return (txt || "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/https?:\/\/\S+/g, " ").replace(/\s{2,}/g, " ").trim())
+    .filter((l) => l && !/^(?:twitter|x|facebook|instagram|discord|tiktok|twitch|reddit|patreon|merch|shop|abonne|subscribe|follow|suis[- ]moi|rejoins|music|musique|credits?|©|\d{4}\s|#\w+\s*$)/i.test(l))
+    .join("\n")
+    .slice(0, 6000);
+}
+
+// Une vidéo présente-t-elle PLUSIEURS jeux (Top 10, best of, sélection) ou un seul ?
+// C'est la distinction qui manquait : on extrayait tous les jeux cités même pour un
+// simple trailer, ce qui ramenait les jeux des liens promo de la description.
+export function looksLikeMultiGameVideo(titre, description) {
+  if (looksLikeListicle(titre)) return true;
+  if (/\b(?:top|best|meilleurs?|selection|sélection|classement|list[e]?)\b/i.test(titre || "")) return true;
+  // sommaire numéroté ou chapitrage horodaté dans la description : « 1. Jeu », « 03:12 Jeu »
+  const lignes = (description || "").split(/\r?\n/);
+  const numerotees = lignes.filter((l) => /^\s*(?:\d{1,2}\s*[).\-–:]|\d{1,2}:\d{2})\s+\S/.test(l)).length;
+  return numerotees >= 4;
+}
+
+// Extrait les jeux d'UNE vidéo YouTube.
+//  · vidéo « Top 10 / sélection »  → tous les jeux listés (titre + description, via LLM) ;
+//  · vidéo sur un seul jeu         → le jeu du titre, sans toucher à la description ;
+//  · sans clé API ou sans LLM      → repli sur le titre via oEmbed (marche toujours).
 export async function youtubeVideoGames(url, env) {
-  const key = env.YOUTUBE_API_KEY;
   const m = url.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{11})/);
-  if (!key || !m) return [];
-  const j = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${m[1]}&key=${key}`).then(r => r.json()).catch(() => ({}));
-  const s = j.items?.[0]?.snippet;
-  if (!s) return [];
-  return llmExtractTitles(`${s.title}\n${s.description || ""}`, env);
+  if (!m) return { games: [], multi: false };
+  let titre = "", description = "";
+  if (env.YOUTUBE_API_KEY) {
+    const j = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${m[1]}&key=${env.YOUTUBE_API_KEY}`)
+      .then((r) => r.json()).catch(() => ({}));
+    const s = j.items?.[0]?.snippet;
+    if (s) { titre = s.title || ""; description = s.description || ""; }
+  }
+  if (!titre) {
+    const j = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`)
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    titre = j?.title || "";
+  }
+  if (!titre) return { games: [], multi: false, error: "Vidéo YouTube illisible (privée, supprimée ou lien invalide)." };
+
+  const multi = looksLikeMultiGameVideo(titre, description);
+  const seul = cleanTitle(titre);
+  if (!multi) return { games: seul ? [seul] : [], multi: false, titreVideo: titre };
+
+  const games = await llmExtractGamesFromPost(
+    { titre, texte: cleanDescription(description), source: "vidéo YouTube" }, env
+  );
+  // sur une sélection, surtout PAS de repli sur le titre : « Top 10 des jeux PS5 »
+  // deviendrait un faux jeu. On explique plutôt pourquoi la vidéo n'a rien donné.
+  if (!games.length) {
+    return { games: [], multi: true, titreVideo: titre,
+      error: `« ${titre.slice(0, 60)} » liste plusieurs jeux, mais sa description ne les nomme pas — les titres ne sont visibles que dans la vidéo. Copie-les à la main (un par ligne).` };
+  }
+  return { games, multi: true, titreVideo: titre };
+}
+
+// Extrait les jeux d'UN post / reel Instagram.
+// Instagram ne sert plus aucune métadonnée (og:*) aux robots non authentifiés : la page
+// renvoyée est une coquille JavaScript. Sans jeton oEmbed officiel, il n'y a rien à lire —
+// on le dit clairement plutôt que de renvoyer un titre vide ou un jeu au hasard.
+export async function instagramGames(url, env) {
+  const token = env.INSTAGRAM_OEMBED_TOKEN || (env.META_APP_ID && env.META_CLIENT_TOKEN ? `${env.META_APP_ID}|${env.META_CLIENT_TOKEN}` : "");
+  let caption = "";
+  if (token) {
+    const u = `https://graph.facebook.com/v20.0/instagram_oembed?url=${encodeURIComponent(url)}&fields=title,author_name&access_token=${token}`;
+    const j = await fetch(u).then((r) => r.json()).catch(() => null);
+    caption = j?.title || "";
+  }
+  if (!caption) {
+    // dernier essai : og:description (fonctionne encore sur de rares posts / miroirs)
+    const html = await fetchText(url);
+    caption = metaContent(html, "og:description") || metaContent(html, "og:title") || "";
+    caption = caption.replace(/^[^:]*\s+on Instagram[:\s]*/i, "").trim();
+  }
+  if (!caption) {
+    return { games: [], error: "Instagram ne laisse plus lire ses publications (légende inaccessible). Colle le TEXTE de la légende dans « Plusieurs » — tous les jeux cités seront détectés." };
+  }
+  const games = await llmExtractGamesFromPost({ titre: "", texte: caption, source: "publication Instagram" }, env);
+  if (games.length) return { games, caption };
+  // pas de LLM disponible : on retombe sur l'heuristique « nom du jeu : X »
+  const gm = caption.match(/(?:nom du jeu|game name|it['’]s called|jeu\s*)\s*[:\-]\s*([^\n.#]{2,60})/i);
+  const guess = gm ? gm[1].trim() : cleanTitle(caption.split(/[\n#]/)[0] || "");
+  return { games: guess ? [guess] : [], caption };
 }
 
 // Détection « légère » pour la preview : résout le titre canonique (via Steam) sans tout enrichir.
 export async function detectLight(input, env) {
-  const det = await detectTitle(input);
+  const det = await detectTitle(input, env);
   let titre = det.titre, appid = det.steamAppId || "", name = titre, image = "";
   if (titre && !appid) { const s = await steamSearch(titre); if (s) { appid = s.appid; name = s.name; } }
   if (appid) { const d = await steamDetails(appid); if (d) { name = d.steamName || name; image = d.header || ""; } }
@@ -597,28 +714,46 @@ export async function detectLight(input, env) {
   };
 }
 
+// Nom officiel à retenir pour un jeu enrichi : Steam puis IGDB, à condition qu'il
+// corresponde vraiment à ce qui a été demandé (sinon on conserve le titre saisi).
+function canonique(g, demande) {
+  if (!g) return demande;
+  const cands = [g.steamName, g.igdbName].filter(Boolean);
+  cands.sort((a, b) => dice(demande, b) - dice(demande, a));
+  const best = cands[0];
+  return best && dice(demande, best) >= 0.5 ? best : (g.titre || demande);
+}
+
 // Analyse un lot d'entrées (texte multi-lignes + playlist) → jeux ENRICHIS complets (preview).
 // Chaque jeu non-doublon est entièrement enrichi (genre, joueurs, note, prix, date, screenshots…).
 export async function detectMany({ text = "", playlist = "", extract = false }, env, existingTitles = []) {
+  // chaque entrée = { q: titre à résoudre, reel?: lien d'origine à conserver sur la fiche }
   const inputs = [];
+  const notes = []; // messages à remonter quand une source n'a rien donné
   if (playlist) {
     const r = await youtubePlaylistTitles(playlist, env);
     if (r.error) return { error: r.error };
-    inputs.push(...r.titles);
+    inputs.push(...r.titles.map((q) => ({ q })));
   }
   if (text) {
     // extract = texte libre / document → on demande au LLM d'en extraire les titres
-    if (extract) inputs.push(...(await llmExtractTitles(text, env)));
+    if (extract) inputs.push(...(await llmExtractTitles(text, env)).map((q) => ({ q })));
     else {
       for (const line of text.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) {
-        // une vidéo YouTube → extrait TOUS les jeux qu'elle mentionne (titre + description)
+        // vidéo YouTube → un seul jeu si c'est un trailer, tous les jeux si c'est une sélection
         if (/youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts/.test(line)) {
-          inputs.push(...(await youtubeVideoGames(line, env)));
-        } else inputs.push(line);
+          const r = await youtubeVideoGames(line, env).catch(() => ({ games: [] }));
+          if (r.error) notes.push(r.error);
+          inputs.push(...r.games.map((q) => ({ q, reel: line })));
+        } else if (/instagram\.com\//.test(line)) {
+          const r = await instagramGames(line, env).catch(() => ({ games: [] }));
+          if (r.error) notes.push(r.error);
+          inputs.push(...r.games.map((q) => ({ q, reel: line })));
+        } else inputs.push({ q: line });
       }
     }
   }
-  if (!inputs.length) return { error: "Aucun jeu trouvé (vérifie le lien / la vidéo)." };
+  if (!inputs.length) return { error: notes[0] || "Aucun jeu trouvé (vérifie le lien / la vidéo)." };
   if (inputs.length > 40) inputs.length = 40; // garde-fou
 
   const seen = new Set(existingTitles.map(t => t.toLowerCase()));
@@ -626,7 +761,8 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
   const skipped = [];
   const CONC = 4;
   for (let i = 0; i < inputs.length; i += CONC) {
-    const batch = await Promise.all(inputs.slice(i, i + CONC).map(async (inp) => {
+    const batch = await Promise.all(inputs.slice(i, i + CONC).map(async (item) => {
+      const inp = item.q;
       // écarte les listicles (Top 10, 15 Best Games…) : ce ne sont pas des jeux
       if (looksLikeListicle(inp)) return { skip: inp };
       const d = await detectLight(inp, env).catch(() => null);
@@ -634,22 +770,30 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
       if (looksLikeListicle(d.titre)) return { skip: inp };
       const key = d.titre.toLowerCase();
       if (seen.has(key)) return { ...d, duplicate: true };
+      const reel = item.reel || (d.source === "instagram" || d.source === "youtube" ? d.input : "");
       const enriched = await enrichGame(
-        { titre: d.titre, steamAppId: d.steamAppId, psnUrl: d.psnUrl,
-          reel: d.source === "instagram" || d.source === "youtube" ? d.input : "" },
+        { titre: d.titre, steamAppId: d.steamAppId, psnUrl: d.psnUrl, reel },
         env
       ).catch(() => null);
-      const good = enriched && (enriched.steamAppId || enriched.igdbId) &&
-        !(d.source === "texte" && dice(inp, enriched.titre) < 0.34);
-      if (good) return { ...enriched, input: d.input, source: d.source, duplicate: false };
+      // on valide sur le nom OFFICIEL renvoyé par Steam/IGDB, pas sur la saisie :
+      // « Hadees II » matche Hades II sur IGDB — il faut l'enregistrer sous son vrai nom,
+      // et rejeter le match si les deux noms n'ont rien à voir.
+      const canon = canonique(enriched, d.titre);
+      const good = enriched && (enriched.steamAppId || enriched.igdbId) && dice(d.titre, canon) >= 0.34;
+      if (good) {
+        const g = { ...enriched, titre: canon, input: d.input, source: d.source, duplicate: seen.has(canon.toLowerCase()) };
+        if (canon.toLowerCase() !== d.titre.toLowerCase() && dice(inp, canon) < 0.98) g.corrected = inp;
+        return g;
+      }
       // aucun match fiable : dernier recours = correction du titre via LLM, puis nouvelle tentative
-      if (d.source === "texte" && env.ANTHROPIC_API_KEY) {
+      if (d.source === "texte" && hasLLM(env)) {
         const fixed = await llmCorrectTitle(inp, env);
         if (fixed && fixed.toLowerCase() !== inp.toLowerCase()) {
-          const e2 = await enrichGame({ titre: fixed }, env).catch(() => null);
+          const e2 = await enrichGame({ titre: fixed, reel }, env).catch(() => null);
           if (e2 && (e2.steamAppId || e2.igdbId)) {
-            if (seen.has(e2.titre.toLowerCase())) return { ...e2, duplicate: true };
-            return { ...e2, input: d.input, source: d.source, duplicate: false, corrected: inp };
+            const c2 = canonique(e2, fixed);
+            if (seen.has(c2.toLowerCase())) return { ...e2, titre: c2, duplicate: true };
+            return { ...e2, titre: c2, input: d.input, source: d.source, duplicate: false, corrected: inp };
           }
         }
       }
@@ -662,7 +806,7 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
       out.push(g);
     }
   }
-  return { games: out, skipped };
+  return { games: out, skipped, notes };
 }
 
 // Moteur de découverte IGDB : filtre par plateforme / genre / mode / coop local / joueurs / note.
