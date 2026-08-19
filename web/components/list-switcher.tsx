@@ -7,7 +7,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 type L = { slug: string; name: string; count: number };
-const href = (slug: string) => (slug === "decouvertes" ? "/" : `/l/${slug}`);
+// « / » n'est plus une liste mais la vue agrégée : chaque liste a sa propre page.
+const href = (slug: string) => `/l/${slug}`;
 
 export function ListSwitcher({
   currentName, publicLists, userLists,
@@ -21,6 +22,10 @@ export function ListSwitcher({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuItem asChild>
+          <Link href="/" className="font-semibold">🎮 Tous les jeux</Link>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>Listes publiques</DropdownMenuLabel>
         {publicLists.map((l) => (
           <DropdownMenuItem key={l.slug} asChild>

@@ -1,9 +1,10 @@
 "use server";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
-import { authActionClient } from "@/lib/safe-action";
+import { authActionClient, openActionClient } from "@/lib/safe-action";
 import { prisma } from "@/lib/prisma";
 import { createList } from "@/lib/store";
+import { allow } from "@/lib/ratelimit";
 
 function slugify(s: string) {
   return s
@@ -15,7 +16,9 @@ function slugify(s: string) {
     .slice(0, 50);
 }
 
-export const createNewList = authActionClient
+// Ouvert à tous : sans compte, la liste créée n'a pas de propriétaire — elle est
+// collaborative, comme « Découvertes ». Avec un compte, elle appartient à son auteur.
+export const createNewList = openActionClient
   .inputSchema(
     z.object({
       name: z.string().min(2, "Nom trop court").max(60),
@@ -24,11 +27,17 @@ export const createNewList = authActionClient
     })
   )
   .action(async ({ parsedInput: { name, description, isPublic }, ctx }) => {
+    if (!(await allow(ctx.user ? "enrich" : "anon", ctx.key))) {
+      throw new Error("Trop de listes créées d'un coup — réessaie dans quelques minutes.");
+    }
     const base = slugify(name) || "liste";
     let slug = base;
     let i = 1;
     while (await prisma.list.findUnique({ where: { slug } })) slug = `${base}-${i++}`;
-    const list = await createList({ name, slug, description: description || null, isPublic, ownerId: ctx.user.id });
+    const list = await createList({
+      name, slug, description: description || null, isPublic,
+      ownerId: ctx.user?.id ?? null,
+    });
     revalidatePath("/");
     return { slug: list.slug, name: list.name };
   });

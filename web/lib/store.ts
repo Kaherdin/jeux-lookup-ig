@@ -33,6 +33,39 @@ export async function getDefaultList() {
   return prisma.list.findUnique({ where: { slug: DEFAULT_LIST_SLUG } });
 }
 
+/** Slugs des listes-bibliothèques générées pour un utilisateur (import PSN / Steam). */
+export function libSlugs(userId: string) {
+  const k = userId.slice(0, 8).toLowerCase();
+  return { psn: `ps-${k}`, steam: `steam-${k}` };
+}
+
+/**
+ * Titres que l'utilisateur POSSÈDE déjà : ceux venant de ses bibliothèques PSN / Steam
+ * importées. Sert à distinguer « je l'ai » de « je le veux » dans les listes.
+ */
+export async function getOwnedTitles(userId: string): Promise<string[]> {
+  const { psn, steam } = libSlugs(userId);
+  const lists = await prisma.list.findMany({
+    where: { ownerId: userId, slug: { in: [psn, steam] } },
+    select: { id: true },
+  });
+  if (!lists.length) return [];
+  const rows = await prisma.game.findMany({
+    where: { listId: { in: lists.map((l) => l.id) } },
+    select: { titre: true },
+  });
+  return rows.map((r) => r.titre);
+}
+
+/** Toutes les listes visibles par quelqu'un : les publiques + les siennes. */
+export async function getVisibleLists(userId?: string | null) {
+  return prisma.list.findMany({
+    where: userId ? { OR: [{ isPublic: true }, { ownerId: userId }] } : { isPublic: true },
+    orderBy: { createdAt: "asc" },
+    include: { _count: { select: { games: true } } },
+  });
+}
+
 export async function createList(data: {
   name: string;
   slug: string;
@@ -70,6 +103,11 @@ export async function upsertGame(listId: string, g: GameInput) {
     create: data,
     update: data,
   });
+}
+
+export async function deleteGame(listId: string, id: string) {
+  const res = await prisma.game.deleteMany({ where: { id, listId } });
+  return res.count > 0;
 }
 
 export async function createGames(listId: string, list: GameInput[]) {

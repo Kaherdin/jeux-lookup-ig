@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
-import { LogOut, User as UserIcon, RefreshCw, Loader2, Library } from "lucide-react";
+import { LogOut, User as UserIcon, RefreshCw, Loader2, Library, Gamepad2 } from "lucide-react";
 import { signOut } from "@/lib/auth-client";
 import { rescanList } from "@/app/actions/games";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,9 @@ export function UserMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link href="/mes-jeux"><Library className="mr-2 h-4 w-4" /> Tous mes jeux</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/compte"><Gamepad2 className="mr-2 h-4 w-4" /> Mon compte &amp; bibliothèques</Link>
         </DropdownMenuItem>
         {rescanSlug && (
           <DropdownMenuItem

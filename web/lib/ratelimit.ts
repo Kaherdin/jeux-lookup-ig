@@ -27,6 +27,9 @@ const limiters = {
   general: make(40, "1 m", "rl:gen"),
   enrich: make(15, "1 m", "rl:enrich"),
   heavy: make(4, "10 m", "rl:heavy"),
+  // visiteur sans compte : une analyse = plusieurs appels API + un appel IA facturé.
+  // Serré volontairement, c'est le garde-fou anti-abus de la liste partagée.
+  anon: make(5, "10 m", "rl:anon"),
 };
 
 export type RateTier = keyof typeof limiters;

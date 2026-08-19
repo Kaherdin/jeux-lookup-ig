@@ -1,13 +1,13 @@
 "use server";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
-import { authActionClient } from "@/lib/safe-action";
-import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList } from "@/lib/store";
+import { authActionClient, openActionClient } from "@/lib/safe-action";
+import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, deleteGame } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
 import { fetchSteamLibrary } from "@/lib/steam";
-import { detectTitle, enrichGame, detectAnything, igdbDiscover } from "@/lib/enrich.mjs";
+import { enrichGame, detectAnything, igdbDiscover } from "@/lib/enrich.mjs";
 import type { PreviewGame } from "@/lib/types";
 
 const env = () => ({
@@ -16,6 +16,12 @@ const env = () => ({
   ITAD_KEY: process.env.ITAD_KEY,
   ITAD_ID: process.env.ITAD_ID,
   YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
+  // URL publique du site : envoyée en Referer à l'API YouTube, dont la clé est restreinte
+  // par référent (sinon Google refuse tout appel serveur).
+  APP_URL: process.env.BETTER_AUTH_URL
+    || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "")
+    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "")
+    || "http://localhost:3000",
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
   // secours automatique quand Anthropic est indisponible (quota, panne)
@@ -28,10 +34,32 @@ const env = () => ({
   META_CLIENT_TOKEN: process.env.META_CLIENT_TOKEN,
 });
 
-async function assertCanEdit(slug: string, userId: string) {
+type Actor = { id: string } | null;
+
+/**
+ * Droit d'AJOUTER dans une liste. Une liste sans propriétaire (« Découvertes ») est
+ * collaborative : tout le monde y ajoute, même sans compte. Une liste possédée reste
+ * privée à son auteur.
+ */
+async function assertCanAdd(slug: string, user: Actor) {
   const list = await getListBySlug(slug);
   if (!list) throw new Error("Liste introuvable.");
-  if (list.ownerId && list.ownerId !== userId) throw new Error("Cette liste ne t'appartient pas.");
+  if (!list.ownerId) return list;
+  if (!user) throw new Error("Connecte-toi pour ajouter dans cette liste.");
+  if (list.ownerId !== user.id) throw new Error("Cette liste ne t'appartient pas.");
+  return list;
+}
+
+/**
+ * Droit de MODIFIER l'existant (supprimer, rescanner). Plus strict que l'ajout : sur la
+ * liste collaborative il faut au moins un compte, sinon n'importe quel visiteur pourrait
+ * effacer le travail des autres.
+ */
+async function assertCanManage(slug: string, user: Actor) {
+  const list = await getListBySlug(slug);
+  if (!list) throw new Error("Liste introuvable.");
+  if (!user) throw new Error("Connecte-toi pour modifier cette liste.");
+  if (list.ownerId && list.ownerId !== user.id) throw new Error("Cette liste ne t'appartient pas.");
   return list;
 }
 
@@ -40,36 +68,24 @@ function revalidate(slug: string) {
   revalidatePath(`/l/${slug}`);
 }
 
-export const addGame = authActionClient
-  .inputSchema(z.object({ slug: z.string(), input: z.string().min(1) }))
-  .action(async ({ parsedInput: { slug, input }, ctx }) => {
-    const list = await assertCanEdit(slug, ctx.user.id);
-    const det = await detectTitle(input.trim(), env());
-    if (!det.titre) throw new Error(det.error ?? "Impossible de détecter un titre. Tape le nom du jeu directement.");
-    if (await gameExists(list.id, det.titre)) return { duplicate: true, titre: det.titre };
-    const g = await enrichGame(
-      {
-        titre: det.titre,
-        steamAppId: det.steamAppId,
-        psnUrl: det.psnUrl,
-        reel: det.source === "instagram" || det.source === "youtube" ? input : "",
-        ajouteLe: new Date().toISOString().slice(0, 10),
-      },
-      env()
-    );
-    await upsertGame(list.id, g);
-    revalidate(slug);
-    return { added: true, titre: g.titre, source: det.source };
-  });
-
 // Champ unique : lien YouTube (trailer ou « Top 10 »), playlist, lien Steam / PS Store /
 // Instagram / autre boutique, un titre, une liste de titres, ou un texte libre.
 // C'est detectAnything qui choisit la stratégie — l'interface n'a plus rien à deviner.
-export const analyzeInput = authActionClient
+// Ouvert aux visiteurs sans compte sur les listes collaboratives.
+export const analyzeInput = openActionClient
   .inputSchema(z.object({ slug: z.string(), input: z.string().min(1) }))
   .action(async ({ parsedInput: { slug, input }, ctx }) => {
-    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Analyse limitée — réessaie dans une minute.");
-    const list = await assertCanEdit(slug, ctx.user.id);
+    const anon = !ctx.user;
+    if (!(await allow(anon ? "anon" : "enrich", ctx.key))) {
+      throw new Error(anon
+        ? "Limite atteinte pour les visiteurs (5 analyses / 10 min). Crée un compte pour continuer."
+        : "Analyse limitée — réessaie dans une minute.");
+    }
+    const list = await assertCanAdd(slug, ctx.user);
+    // une playlist = jusqu'à 250 vidéos à enrichir : réservé aux comptes
+    if (anon && /youtube\.com\/playlist|[?&]list=/i.test(input)) {
+      throw new Error("L'import d'une playlist YouTube demande un compte (c'est très gourmand). Colle une vidéo, un titre ou une liste de titres.");
+    }
     const existing = await getTitles(list.id);
     const res = await detectAnything(input, env(), existing);
     return {
@@ -81,8 +97,35 @@ export const analyzeInput = authActionClient
     };
   });
 
+/**
+ * Copie des jeux déjà en base vers une autre liste (sélection multiple).
+ * Le modèle stocke un enregistrement PAR liste : « ajouter à une liste » recopie donc
+ * la fiche, déjà enrichie — aucun appel API, c'est instantané.
+ */
+export const copyToList = openActionClient
+  .inputSchema(z.object({ ids: z.array(z.string()).min(1).max(300), toSlug: z.string() }))
+  .action(async ({ parsedInput: { ids, toSlug }, ctx }) => {
+    const target = await assertCanAdd(toSlug, ctx.user);
+    const rows = await prisma.game.findMany({ where: { id: { in: ids } } });
+    if (!rows.length) throw new Error("Aucun jeu à copier.");
+    const added = await createGames(target.id, rows as unknown as Array<Record<string, unknown> & { titre: string }>);
+    revalidate(toSlug);
+    return { added, total: rows.length, slug: target.slug, name: target.name };
+  });
+
+// supprime un jeu d'une liste (compte requis, même sur une liste collaborative)
+export const deleteGameAction = openActionClient
+  .inputSchema(z.object({ slug: z.string(), id: z.string() }))
+  .action(async ({ parsedInput: { slug, id }, ctx }) => {
+    const list = await assertCanManage(slug, ctx.user);
+    const ok = await deleteGame(list.id, id);
+    if (!ok) throw new Error("Jeu introuvable dans cette liste.");
+    revalidate(slug);
+    return { deleted: true };
+  });
+
 // moteur de découverte IGDB (filtres plateforme / genre / mode / coop local / joueurs / note)
-export const discoverGames = authActionClient
+export const discoverGames = openActionClient
   .inputSchema(z.object({
     platforms: z.array(z.number()).optional(),
     genres: z.array(z.number()).optional(),
@@ -99,11 +142,11 @@ export const discoverGames = authActionClient
   });
 
 // ajoute un jeu trouvé par la découverte (épinglé par ID IGDB) → enrichit + enregistre
-export const addDiscovered = authActionClient
+export const addDiscovered = openActionClient
   .inputSchema(z.object({ slug: z.string(), titre: z.string(), igdbId: z.number().optional() }))
   .action(async ({ parsedInput: { slug, titre, igdbId }, ctx }) => {
-    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Ajout limité — réessaie dans une minute.");
-    const list = await assertCanEdit(slug, ctx.user.id);
+    if (!(await allow(ctx.user ? "enrich" : "anon", ctx.key))) throw new Error("Ajout limité — réessaie dans quelques minutes.");
+    const list = await assertCanAdd(slug, ctx.user);
     if (await gameExists(list.id, titre)) return { titre, duplicate: true };
     const g = await enrichGame({ titre, igdbId, ajouteLe: new Date().toISOString().slice(0, 10) }, env());
     await upsertGame(list.id, g);
@@ -174,7 +217,7 @@ export const importSteam = authActionClient
   });
 
 // reçoit les jeux DÉJÀ enrichis (depuis la preview) → enregistre directement
-export const addBatch = authActionClient
+export const addBatch = openActionClient
   .inputSchema(
     z.object({
       slug: z.string(),
@@ -182,8 +225,8 @@ export const addBatch = authActionClient
     })
   )
   .action(async ({ parsedInput: { slug, items }, ctx }) => {
-    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Ajout limité — réessaie dans une minute.");
-    const list = await assertCanEdit(slug, ctx.user.id);
+    if (!(await allow(ctx.user ? "enrich" : "anon", ctx.key))) throw new Error("Ajout limité — réessaie dans quelques minutes.");
+    const list = await assertCanAdd(slug, ctx.user);
     const added = await createGames(list.id, items as Array<Record<string, unknown> & { titre: string }>);
     revalidate(slug);
     return { added, titres: items.map((it) => it.titre) };
@@ -198,7 +241,7 @@ export const rescanGame = authActionClient
   .inputSchema(z.object({ slug: z.string(), titre: z.string() }))
   .action(async ({ parsedInput: { slug, titre }, ctx }) => {
     if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Rescan limité — réessaie dans une minute.");
-    const list = await assertCanEdit(slug, ctx.user.id);
+    const list = await assertCanManage(slug, ctx.user);
     const existing = await prisma.game.findFirst({ where: { listId: list.id, titre } });
     if (!existing) throw new Error("Jeu introuvable.");
     const enriched = await enrichGame(rescanRec(existing), env());
@@ -211,7 +254,7 @@ export const rescanList = authActionClient
   .inputSchema(z.object({ slug: z.string() }))
   .action(async ({ parsedInput: { slug }, ctx }) => {
     if (!(await allow("heavy", `u:${ctx.user.id}`))) throw new Error("Rescan de liste limité — réessaie dans quelques minutes.");
-    const list = await assertCanEdit(slug, ctx.user.id);
+    const list = await assertCanManage(slug, ctx.user);
     const games = await prisma.game.findMany({ where: { listId: list.id } });
     let n = 0;
     const CONC = 4;

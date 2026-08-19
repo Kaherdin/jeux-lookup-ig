@@ -309,6 +309,16 @@ async function fetchText(url) {
     .then(r => r.text()).catch(() => "");
 }
 export const isUrl = (s) => /^https?:\/\//i.test((s || "").trim());
+// Appel à l'API YouTube. Une clé Google restreinte « par référent HTTP » (le réglage par
+// défaut quand on la crée depuis un site) est refusée sans en-tête Referer :
+// « Requests from referer <empty> are blocked. » On envoie donc l'URL publique de l'app,
+// qui est justement celle autorisée sur la clé.
+export async function youtubeApi(url, env = {}) {
+  const site = env.APP_URL || "http://localhost:3000";
+  return fetch(url, { headers: { Referer: site.replace(/\/?$/, "/"), Origin: site.replace(/\/$/, "") } })
+    .then((r) => r.json())
+    .catch(() => ({}));
+}
 // Les liens Steam d'une description désignent les jeux sans la moindre ambiguïté.
 export function steamAppIdsFrom(txt) {
   return [...new Set([...String(txt || "").matchAll(/store\.steampowered\.com\/app\/(\d+)/g)].map((x) => x[1]))];
@@ -319,6 +329,19 @@ export function looksLikeProse(line) {
   const s = (line || "").trim();
   if (!s) return false;
   return s.length > 80 || s.split(/\s+/).length >= 12;
+}
+// Une ligne est-elle un titre de jeu utilisable TEL QUEL ? Un chapitrage collé depuis
+// YouTube (« 0:51 Rhythm Heaven Groover », « (1-4 Local) », « [ Review Round Up ] »)
+// n'en est pas un : envoyé brut au moteur de recherche il ne matche rien — c'est à l'IA
+// d'en extraire les vrais titres.
+export function looksLikeCleanTitle(line) {
+  const s = (line || "").trim();
+  if (!s || looksLikeProse(s)) return false;
+  if (/^\d{1,2}:\d{2}/.test(s)) return false;             // horodatage
+  if (/^\d{1,3}\s*[).\-–—:]/.test(s)) return false;       // « 3. Jeu », « 12) Jeu »
+  if (/^[[(<{•*+-]/.test(s)) return false;                // section, puce, annotation
+  if (/^(?:https?:)?\/\//i.test(s)) return false;
+  return true;
 }
 function metaContent(html, prop) {
   const re = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, "i");
@@ -629,8 +652,12 @@ export async function youtubePlaylistTitles(url, env) {
     let pageToken = "", apiError = "";
     for (let i = 0; i < 5; i++) { // max 250 vidéos
       const u = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${m[1]}&key=${key}${pageToken ? `&pageToken=${pageToken}` : ""}`;
-      const j = await fetch(u).then(r => r.json()).catch(() => ({}));
-      if (j.error) { apiError = j.error?.message || "Erreur API YouTube."; break; }
+      const j = await youtubeApi(u, env);
+      if (j.error) {
+        apiError = j.error?.message || "Erreur API YouTube.";
+        console.warn("[youtube] API playlist refusée :", apiError, "— repli sur la page HTML.");
+        break;
+      }
       for (const it of (j.items || [])) if (propre(it.snippet?.title)) titles.push(it.snippet.title);
       if (!j.nextPageToken) break;
       pageToken = j.nextPageToken;
@@ -672,6 +699,23 @@ export function looksLikeMultiGameVideo(titre, description) {
   return steamAppIdsFrom(description).length >= 3;
 }
 
+// Endpoint interne du lecteur YouTube (celui qu'utilise le site lui-même) : renvoie un
+// petit JSON avec titre + description complète, SANS clé API. C'est la source la plus
+// fiable côté serveur — l'API officielle refuse une clé restreinte par référent, et la
+// page /watch fait 2 Mo (lente, et parfois remplacée par un mur de consentement).
+export async function youtubePlayerDetails(id) {
+  const j = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "User-Agent": BROWSER_UA },
+    body: JSON.stringify({
+      context: { client: { clientName: "WEB", clientVersion: "2.20240101.00.00", hl: "fr", gl: "CH" } },
+      videoId: id,
+    }),
+  }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const vd = j?.videoDetails;
+  return vd?.title || vd?.shortDescription ? vd : null;
+}
+
 // Titre + description d'une vidéo, par ordre de fiabilité :
 //  1. l'API officielle — mais une clé restreinte « par référent HTTP » est refusée côté
 //     serveur (« Requests from referer <empty> are blocked ») : l'API renvoyait donc VIDE ;
@@ -684,11 +728,15 @@ export async function youtubeMeta(url, env = {}) {
   const id = m[1];
   let titre = "", description = "", apiError = "";
   if (env.YOUTUBE_API_KEY) {
-    const j = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${id}&key=${env.YOUTUBE_API_KEY}`)
-      .then((r) => r.json()).catch(() => ({}));
+    const j = await youtubeApi(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${id}&key=${env.YOUTUBE_API_KEY}`, env);
     apiError = j?.error?.message || "";
+    if (apiError) console.warn("[youtube] API refusée :", apiError, "— repli sur le lecteur interne.");
     const s = j.items?.[0]?.snippet;
     if (s) { titre = s.title || ""; description = s.description || ""; }
+  }
+  if (!description) {
+    const vd = await youtubePlayerDetails(id);
+    if (vd) { titre = titre || vd.title || ""; description = vd.shortDescription || ""; }
   }
   if (!description) {
     const html = await fetchText(`https://www.youtube.com/watch?v=${id}`);
@@ -798,7 +846,8 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
     // extract = texte libre / document → on demande au LLM d'en extraire les titres
     if (extract) inputs.push(...(await llmExtractTitles(text, env)).map((q) => ({ q })));
     else {
-      const prose = []; // lignes de texte libre : regroupées pour une seule extraction IA
+      const prose = []; // lignes sans lien : regroupées pour une seule passe d'extraction
+      let tronques = 0; // liens copiés depuis l'interface YouTube, coupés par « … »
       for (const line of text.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) {
         // playlist YouTube (/playlist?list=…) → tous les titres de la playlist
         if (/youtube\.com\/playlist/.test(line) || (/[?&]list=/.test(line) && !/[?&]v=/.test(line) && /youtube\.com/.test(line))) {
@@ -815,17 +864,29 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
           const r = await instagramGames(line, env).catch(() => ({ games: [] }));
           if (r.error) notes.push(r.error);
           inputs.push(...r.games.map((q) => ({ q, reel: line })));
-        } else if (!isUrl(line) && looksLikeProse(line)) prose.push(line);
-        else inputs.push({ q: line }); // lien Steam / PS Store / autre, ou titre tapé
+        } else if (isUrl(line)) {
+          // « https://store.steampowered.com/app/43... » : lien tronqué à la copie, illisible.
+          // Le titre est de toute façon sur la ligne d'à côté — on l'ignore en silence.
+          if (/(?:\.{3}|…)\s*$/.test(line)) tronques++;
+          else inputs.push({ q: line }); // lien Steam / PS Store / boutique
+        } else prose.push(line);
       }
-      // paragraphe(s) collé(s) : une seule passe d'extraction IA sur l'ensemble
+      // Lignes sans lien. Si ce sont TOUTES des titres propres, on les résout directement
+      // (rapide, déterministe). Dès qu'une ligne est du texte, un horodatage ou une
+      // annotation, c'est l'IA qui extrait les titres du bloc entier — sinon « 0:51 Rhythm
+      // Heaven Groover » partait tel quel au moteur de recherche et ne matchait rien.
       if (prose.length) {
-        const titres = await llmExtractTitles(prose.join("\n"), env);
-        if (titres.length) inputs.push(...titres.map((q) => ({ q })));
-        else notes.push(hasLLM(env)
-          ? "Aucun jeu reconnu dans le texte collé."
-          : "Texte libre : l'extraction automatique nécessite une clé IA (ANTHROPIC_API_KEY / OPENAI_API_KEY).");
+        if (prose.every(looksLikeCleanTitle)) inputs.push(...prose.map((q) => ({ q })));
+        else if (hasLLM(env)) {
+          const titres = await llmExtractTitles(prose.join("\n"), env);
+          if (titres.length) inputs.push(...titres.map((q) => ({ q })));
+          else notes.push("Aucun jeu reconnu dans le texte collé.");
+        } else {
+          inputs.push(...prose.filter(looksLikeCleanTitle).map((q) => ({ q })));
+          notes.push("Sans clé IA (ANTHROPIC_API_KEY / OPENAI_API_KEY), seules les lignes qui sont déjà des titres exacts sont reconnues.");
+        }
       }
+      if (tronques && !inputs.length) notes.push(`${tronques} lien(s) tronqué(s) par la copie (« …app/43... ») : colle plutôt le lien de la vidéo, ou les titres.`);
     }
   }
   if (!inputs.length) return { error: notes[0] || "Aucun jeu trouvé (vérifie le lien / la vidéo)." };
@@ -982,7 +1043,7 @@ export async function detectAnything(input, env, existingTitles = []) {
 
   const lignes = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   // un seul titre tapé (ni lien, ni phrase) → on propose les candidats à choisir
-  if (lignes.length === 1 && !isUrl(lignes[0]) && !looksLikeProse(lignes[0])) {
+  if (lignes.length === 1 && looksLikeCleanTitle(lignes[0])) {
     const r = await detectCandidates(lignes[0], env, existingTitles);
     if (r.games.length) return { games: r.games, skipped: [], notes: [], mode: "candidats" };
     // aucun candidat : on retente en passant par la détection générale (typos, titres exotiques)

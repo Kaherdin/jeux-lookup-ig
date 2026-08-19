@@ -66,6 +66,8 @@ export type Game = {
   urlStore: string | null;
   urlPsn: string | null;
   reel: string | null;
+  /** liste d'origine — renseigné uniquement dans les vues qui agrègent plusieurs listes */
+  listSlug?: string;
 };
 
 export type PreviewGame = Partial<Game> & {
