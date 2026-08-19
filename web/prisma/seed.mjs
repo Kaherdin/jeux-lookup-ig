@@ -12,9 +12,9 @@ const list = await prisma.list.upsert({
   where: { slug: "decouvertes" },
   update: {},
   create: {
-    name: "Découvertes Instagram",
+    name: "Découvertes",
     slug: "decouvertes",
-    description: "Jeux repérés sur Instagram, enrichis via Steam / IGDB / ITAD.",
+    description: "Jeux repérés au fil de l'eau, enrichis via Steam / IGDB / ITAD.",
     isPublic: true,
   },
 });

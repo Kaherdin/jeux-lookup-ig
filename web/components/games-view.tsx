@@ -1,17 +1,12 @@
 "use client";
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useAction } from "next-safe-action/hooks";
-import { toast } from "sonner";
-import { Plus, RefreshCw, Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import type { Game, ListMeta } from "@/lib/types";
-import { rescanList } from "@/app/actions/games";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { AddGamesDialog } from "@/components/add-games-dialog";
 import { GameDetailDialog } from "@/components/game-detail-dialog";
 
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
@@ -186,8 +181,6 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
         </Select>
         <Button variant="outline" size="icon" onClick={() => setSortDir((d) => -d)} title="Inverser le sens">{sortDir === 1 ? "▲" : "▼"}</Button>
         <Button asChild variant="outline"><Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> Trouver un jeu</Link></Button>
-        {canEdit && <AddGamesDialog slug={list.slug} trigger={<Button><Plus className="mr-1 h-4 w-4" /> Ajouter</Button>} />}
-        {canEdit && <RescanListButton slug={list.slug} count={games.length} />}
       </div>
 
       {/* chips */}
@@ -227,21 +220,6 @@ export function GamesView({ games, list, canEdit }: { games: Game[]; list: ListM
         </table>
       </div>
     </div>
-  );
-}
-
-function RescanListButton({ slug, count }: { slug: string; count: number }) {
-  const router = useRouter();
-  const action = useAction(rescanList, {
-    onSuccess: ({ data }) => { toast.success(`${data?.count ?? 0} jeu(x) re-scanné(s).`); router.refresh(); },
-    onError: ({ error }) => toast.error(error.serverError ?? "Échec du re-scan."),
-  });
-  return (
-    <Button variant="outline" disabled={action.isPending}
-      title="Re-enrichit tous les jeux (comble les infos manquantes)"
-      onClick={() => { if (confirm(`Rescanner les ${count} jeux de la liste ? Cela peut prendre un moment.`)) action.execute({ slug }); }}>
-      {action.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />} Rescanner
-    </Button>
   );
 }
 

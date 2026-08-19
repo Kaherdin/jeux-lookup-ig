@@ -3,26 +3,26 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
-import { detectGames, addBatch, searchGames, importPsn, importSteam } from "@/app/actions/games";
+import { Loader2, Sparkles, Library, ChevronDown } from "lucide-react";
+import { analyzeInput, addBatch, importPsn, importSteam } from "@/app/actions/games";
 import type { PreviewGame } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
+const PLACEHOLDER =
+  "Colle n'importe quoi : un lien YouTube (même un « Top 10 »), une playlist, un lien Steam / PlayStation / Instagram / Nintendo, un titre, une liste de titres (un par ligne), ou un texte entier…";
+
 export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
 
-  const [single, setSingle] = useState("");
-  const [text, setText] = useState("");
-  const [playlist, setPlaylist] = useState("");
-  const [extract, setExtract] = useState(false);
+  const [input, setInput] = useState("");
+  const [lib, setLib] = useState(false); // panneau « importer une bibliothèque »
   const [npsso, setNpsso] = useState("");
   const [detected, setDetected] = useState<PreviewGame[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -46,24 +46,28 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
     onError: ({ error }) => toast.error(error.serverError ?? "Échec du rafraîchissement Steam."),
   });
 
-  function showResult(games: PreviewGame[], skipped: string[], pickFirst: boolean, notes: string[] = []) {
-    setDetected(games);
-    if (pickFirst) setSelected(new Set(games.length && !games[0].duplicate ? [0] : []));
-    else setSelected(new Set(games.map((g, i) => (!g.duplicate ? i : -1)).filter((i) => i >= 0)));
-    const dup = games.filter((g) => g.duplicate).length;
-    // ex. « Instagram ne laisse plus lire ses publications » : à dire, sinon l'échec est incompréhensible
-    for (const n of notes) toast.warning(n, { duration: 9000 });
-    if (!games.length) { if (!notes.length) toast.warning(skipped.length ? `Aucun jeu reconnu (${skipped.length} ignoré).` : "Aucun jeu trouvé."); }
-    else toast.success(`${games.length} trouvé(s)${dup ? ` · ${dup} déjà présent(s)` : ""}${skipped.length ? ` · ${skipped.length} ignoré(s)` : ""}.`);
-  }
-
-  const detect = useAction(detectGames, {
-    onSuccess: ({ data }) => showResult(data?.games ?? [], data?.skipped ?? [], false, data?.notes ?? []),
+  const analyze = useAction(analyzeInput, {
+    onSuccess: ({ data }) => {
+      const games = data?.games ?? [];
+      const skipped = data?.skipped ?? [];
+      const notes = data?.notes ?? [];
+      setDetected(games);
+      // un titre tapé → plusieurs candidats : on ne coche que le plus probable.
+      // tout le reste (lien, liste, vidéo) → tout ce qui n'est pas déjà présent.
+      const pickFirst = data?.mode === "candidats";
+      setSelected(pickFirst
+        ? new Set(games.length && !games[0].duplicate ? [0] : [])
+        : new Set(games.map((g, i) => (!g.duplicate ? i : -1)).filter((i) => i >= 0)));
+      // ex. « Instagram ne laisse plus lire ses publications » : à dire, sinon l'échec est incompréhensible
+      for (const n of notes) toast.warning(n, { duration: 9000 });
+      const dup = games.filter((g) => g.duplicate).length;
+      if (!games.length) {
+        if (!notes.length) toast.warning(skipped.length ? `Aucun jeu reconnu (${skipped.length} ignoré).` : "Aucun jeu trouvé.");
+      } else {
+        toast.success(`${games.length} trouvé(s)${dup ? ` · ${dup} déjà présent(s)` : ""}${skipped.length ? ` · ${skipped.length} ignoré(s)` : ""}.`);
+      }
+    },
     onError: ({ error }) => toast.error(error.serverError ?? "Échec de l'analyse."),
-  });
-  const search = useAction(searchGames, {
-    onSuccess: ({ data }) => showResult(data?.games ?? [], [], true),
-    onError: ({ error }) => toast.error(error.serverError ?? "Échec de la recherche."),
   });
 
   const batch = useAction(addBatch, {
@@ -77,19 +81,12 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
   });
 
   function reset() {
-    setDetected(null); setSelected(new Set()); setSingle(""); setText(""); setPlaylist("");
+    setDetected(null); setSelected(new Set()); setInput(""); setLib(false);
   }
-  function analyze(payload: { text?: string; playlist?: string; extract?: boolean }) {
+  function run() {
+    if (!input.trim()) return;
     setDetected(null);
-    detect.execute({ slug, ...payload });
-  }
-  function analyzeSingle() {
-    const s = single.trim();
-    if (!s) return;
-    setDetected(null);
-    const isLink = /^https?:\/\//i.test(s) || /(youtube\.com|youtu\.be|instagram\.com|steampowered\.com|store\.playstation)/i.test(s);
-    if (isLink) detect.execute({ slug, text: s });
-    else search.execute({ slug, query: s }); // titre tapé → propose plusieurs candidats
+    analyze.execute({ slug, input: input.trim() });
   }
   function submitBatch() {
     if (!detected || !selected.size) return;
@@ -101,83 +98,82 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
     setSelected(selected.size >= selectable.length ? new Set() : new Set(selectable));
   }
 
-  const analyzing = detect.isPending || search.isPending;
-
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent className="max-w-xl overflow-hidden">
+      {/* la preview peut lister 35 jeux : le dialogue doit défiler, pas déborder de l'écran */}
+      <DialogContent className="max-h-[90dvh] max-w-xl overflow-y-auto">
         <DialogHeader><DialogTitle>➕ Ajouter des jeux</DialogTitle></DialogHeader>
-        <Tabs defaultValue="single">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="single">Un jeu</TabsTrigger>
-            <TabsTrigger value="multi">Plusieurs</TabsTrigger>
-            <TabsTrigger value="psn">🎮 PSN</TabsTrigger>
-            <TabsTrigger value="steam">Steam</TabsTrigger>
-          </TabsList>
 
-          <TabsContent value="single" className="space-y-3 pt-2">
-            <form onSubmit={(e) => { e.preventDefault(); analyzeSingle(); }} className="flex gap-2">
-              <Input value={single} onChange={(e) => setSingle(e.target.value)} autoFocus
-                placeholder="Lien Steam / PlayStation / YouTube / Instagram, ou un titre…" />
-              <Button type="submit" disabled={analyzing || !single.trim()}>
-                {analyzing && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Analyser
-              </Button>
-            </form>
-            <p className="text-xs text-muted-foreground">Un titre te propose plusieurs jeux (God of War 1, 2, 3…) — coche ceux à ajouter. Un lien détecte le jeu exact.</p>
-          </TabsContent>
+        <div className="space-y-3">
+          <Textarea
+            autoFocus value={input} onChange={(e) => setInput(e.target.value)}
+            placeholder={PLACEHOLDER}
+            // le textarea se dimensionne au contenu (field-sizing) : on impose un plancher
+            // confortable pour qu'on voie tout de suite qu'on peut coller plusieurs lignes
+            className="min-h-[92px] resize-y"
+            onKeyDown={(e) => {
+              // Entrée = analyser (le geste attendu quand on tape un titre) ;
+              // Maj+Entrée = nouvelle ligne, pour lister plusieurs jeux à la main.
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
+            }}
+          />
+          <Button className="w-full" size="lg" disabled={analyze.isPending || !input.trim()} onClick={run}>
+            {analyze.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            {analyze.isPending ? "Analyse en cours…" : "Analyser"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Un <strong>titre</strong> propose plusieurs jeux (God of War 1, 2, 3…) — coche ceux à ajouter.
+            Un <strong>lien</strong> détecte le jeu exact, une <strong>sélection</strong> (Top 10, playlist, article) détecte tous les jeux cités.
+            <span className="ml-1 opacity-70">Entrée pour analyser · Maj+Entrée pour une nouvelle ligne.</span>
+          </p>
+        </div>
 
-          <TabsContent value="multi" className="space-y-3 pt-2">
-            <Textarea rows={extract ? 6 : 4} value={text} onChange={(e) => setText(e.target.value)}
-              placeholder={extract
-                ? "Colle un texte / article / doc entier — l'IA en extrait les jeux automatiquement."
-                : "Un lien ou un titre par ligne :\nhttps://store.steampowered.com/app/…\nHades II\nhttps://store.playstation.com/…"} />
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
-              <Checkbox checked={extract} onCheckedChange={(c) => setExtract(!!c)} />
-              📄 Texte libre / document — extraire les jeux automatiquement (IA)
-            </label>
-            <Input value={playlist} onChange={(e) => setPlaylist(e.target.value)} placeholder="… ou une URL de playlist YouTube" />
-            <Button variant="secondary" disabled={analyzing || (!text.trim() && !playlist.trim())}
-              onClick={() => analyze({ text, playlist, extract })}>
-              {analyzing && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Analyser
-            </Button>
-            <p className="text-xs text-muted-foreground">Détecte plusieurs jeux d&apos;un coup. Une <strong>vidéo YouTube</strong> (même « Top 10 ») → extrait tous les jeux qu&apos;elle mentionne.</p>
-          </TabsContent>
-
-          <TabsContent value="psn" className="space-y-3 pt-2">
-            <p className="text-sm text-muted-foreground">Importe ta bibliothèque PlayStation (jeux joués sur PS4/PS5).</p>
-            <Input value={npsso} onChange={(e) => setNpsso(e.target.value)} placeholder="Colle ton token NPSSO…" />
-            <Button variant="secondary" disabled={psn.isPending || npsso.trim().length < 32}
-              onClick={() => psn.execute({ npsso: npsso.trim() })}>
-              {psn.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Importer ma bibliothèque PSN
-            </Button>
-            <div className="space-y-1 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <p className="font-semibold text-foreground">Récupérer ton token NPSSO (10 sec) :</p>
-              <p>1. Connecte-toi sur <a className="underline" href="https://www.playstation.com" target="_blank" rel="noopener noreferrer">playstation.com</a></p>
-              <p>2. Dans le même navigateur, ouvre <a className="underline" href="https://ca.account.sony.com/api/v1/ssocookie" target="_blank" rel="noopener noreferrer">ce lien</a></p>
-              <p>3. Copie la valeur de <code className="rounded bg-background px-1">npsso</code> et colle-la ci-dessus.</p>
-              <p className="pt-1">Import léger (titre + jaquette + plateforme). Clique ensuite <strong>« Rescanner »</strong> pour tout enrichir (notes, prix, durée…). Le token expire après ~2 mois.</p>
+        {/* import de bibliothèque : rare, donc replié — mais toujours à portée de clic */}
+        <div className="rounded-lg border bg-muted/20">
+          <button type="button" onClick={() => setLib((v) => !v)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm font-semibold hover:bg-muted/40">
+            <Library className="h-4 w-4" /> Importer toute une bibliothèque (Steam / PlayStation)
+            <ChevronDown className={cn("ml-auto h-4 w-4 transition", lib && "rotate-180")} />
+          </button>
+          {lib && (
+            <div className="space-y-4 border-t p-3">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">🎮 Steam</p>
+                <p className="text-xs text-muted-foreground">
+                  Jeux possédés. Aucun mot de passe ne transite par l&apos;app. Ton profil doit être <strong>public</strong>
+                  {" "}(Steam → Profil → Modifier → Confidentialité → « Détails du jeu » = Public).
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button asChild variant="secondary" size="sm"><a href="/api/steam/login">Se connecter avec Steam</a></Button>
+                  <Button variant="ghost" size="sm" disabled={steam.isPending} onClick={() => steam.execute({})}>
+                    {steam.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} 🔄 Rafraîchir (déjà connecté)
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-2 border-t pt-3">
+                <p className="text-sm font-semibold">🎮 PlayStation</p>
+                <div className="flex gap-2">
+                  <Input value={npsso} onChange={(e) => setNpsso(e.target.value)} placeholder="Colle ton token NPSSO…" />
+                  <Button variant="secondary" disabled={psn.isPending || npsso.trim().length < 32}
+                    onClick={() => psn.execute({ npsso: npsso.trim() })}>
+                    {psn.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Importer
+                  </Button>
+                </div>
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <p>1. Connecte-toi sur <a className="underline" href="https://www.playstation.com" target="_blank" rel="noopener noreferrer">playstation.com</a></p>
+                  <p>2. Dans le même navigateur, ouvre <a className="underline" href="https://ca.account.sony.com/api/v1/ssocookie" target="_blank" rel="noopener noreferrer">ce lien</a></p>
+                  <p>3. Copie la valeur de <code className="rounded bg-background px-1">npsso</code> et colle-la ci-dessus. Le token expire après ~2 mois.</p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Import léger (titre + jaquette + plateforme). Lance ensuite <strong>« Rescanner »</strong> (menu de ton compte) pour tout enrichir : notes, prix, coop, durée…
+              </p>
             </div>
-          </TabsContent>
+          )}
+        </div>
 
-          <TabsContent value="steam" className="space-y-3 pt-2">
-            <p className="text-sm text-muted-foreground">Importe ta bibliothèque Steam (jeux possédés). Connecte-toi via Steam — aucun mot de passe ne transite par l&apos;app.</p>
-            <Button asChild variant="secondary" className="w-full">
-              <a href="/api/steam/login">🎮 Se connecter avec Steam</a>
-            </Button>
-            <Button variant="ghost" size="sm" className="w-full" disabled={steam.isPending}
-              onClick={() => steam.execute({})}>
-              {steam.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} 🔄 Rafraîchir (si déjà connecté)
-            </Button>
-            <div className="space-y-1 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <p className="font-semibold text-foreground">À savoir :</p>
-              <p>Ton profil Steam doit être <strong>public</strong> (Steam → Profil → Modifier le profil → Confidentialité → « Détails du jeu » = Public).</p>
-              <p className="pt-1">Import léger (titre + jaquette + appid). Clique ensuite <strong>« Rescanner »</strong> pour enrichir (notes, prix, coop, durée…). L&apos;appid étant récupéré directement, l&apos;enrichissement est très fiable.</p>
-            </div>
-          </TabsContent>
-        </Tabs>
-
-        {/* preview partagée (unitaire + multiple) */}
+        {/* preview */}
         {detected && (
           detected.length === 0 ? (
             <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">Aucun jeu détecté. Vérifie le lien/titre.</p>

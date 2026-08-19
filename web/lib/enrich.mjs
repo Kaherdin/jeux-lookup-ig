@@ -301,9 +301,24 @@ function cleanTitle(raw) {
     .trim();
   return t.slice(0, 80);
 }
+// UA de navigateur : YouTube, le PS Store et la plupart des boutiques servent une page
+// vide (ou une redirection « robot ») à un agent inconnu — sans lui, aucune métadonnée.
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 async function fetchText(url) {
-  return fetch(url, { headers: { "User-Agent": "Mozilla/5.0 GameBacklog/1.0" } })
+  return fetch(url, { headers: { "User-Agent": BROWSER_UA, "Accept-Language": "fr,en;q=0.8" } })
     .then(r => r.text()).catch(() => "");
+}
+export const isUrl = (s) => /^https?:\/\//i.test((s || "").trim());
+// Les liens Steam d'une description désignent les jeux sans la moindre ambiguïté.
+export function steamAppIdsFrom(txt) {
+  return [...new Set([...String(txt || "").matchAll(/store\.steampowered\.com\/app\/(\d+)/g)].map((x) => x[1]))];
+}
+// Une ligne est-elle de la prose (phrase, paragraphe, extrait d'article) plutôt qu'un titre ?
+// Un titre de jeu dépasse rarement 80 caractères ou 12 mots.
+export function looksLikeProse(line) {
+  const s = (line || "").trim();
+  if (!s) return false;
+  return s.length > 80 || s.split(/\s+/).length >= 12;
 }
 function metaContent(html, prop) {
   const re = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, "i");
@@ -341,6 +356,17 @@ export async function detectTitle(input, env = {}) {
   if (/instagram\.com\//.test(s)) {
     const r = await instagramGames(s, env).catch(() => ({ games: [] }));
     return { titre: (r.games[0] || "").slice(0, 80), source: "instagram", rawTitle: (r.caption || "").slice(0, 140), error: r.error };
+  }
+  // n'importe quel autre lien (Nintendo, Xbox, Epic, GOG, un article de blog…) :
+  // on lit le titre de la page. C'est ce qui permet au champ unique de « se débrouiller ».
+  if (isUrl(s)) {
+    const html = await fetchText(s);
+    let t = metaContent(html, "og:title") || metaContent(html, "twitter:title") || "";
+    if (!t) { const m3 = html.match(/<title>([^<]*)<\/title>/i); t = m3 ? m3[1] : ""; }
+    // « Hades II sur Nintendo Switch — Site officiel » → « Hades II »
+    t = t.split(/\s+[|·—–]\s+/)[0].replace(/\s+(?:sur|on|pour|for)\s+(?:Nintendo|Xbox|PlayStation|PC|Steam|Epic|GOG).*/i, "").trim();
+    const titre = cleanTitle(t);
+    return { titre, source: "lien", error: titre ? undefined : "Lien illisible : impossible d'y lire un titre de jeu." };
   }
   // texte libre = titre
   return { titre: cleanTitle(s), source: "texte" };
@@ -590,26 +616,35 @@ export async function enrichGame(rec, env) {
 }
 
 // --- ajout multiple ---------------------------------------------------
-// Récupère les titres des vidéos d'une playlist YouTube (nécessite YOUTUBE_API_KEY).
+// Titres des vidéos d'une playlist YouTube. L'API officielle pagine (jusqu'à 250 vidéos)
+// mais échoue si la clé est restreinte par référent ; on retombe alors sur la page HTML,
+// qui donne les ~100 premières vidéos sans aucune clé.
 export async function youtubePlaylistTitles(url, env) {
-  const key = env.YOUTUBE_API_KEY;
-  const m = url.match(/[?&]list=([\w-]+)/);
-  if (!key) return { error: "YOUTUBE_API_KEY manquante (playlist YouTube)." };
+  const propre = (t) => t && !/^(?:deleted|private) video$/i.test(t.trim());
+  const m = String(url || "").match(/[?&]list=([\w-]+)/);
   if (!m) return { error: "URL de playlist YouTube invalide (pas de paramètre list=)." };
-  const titles = [];
-  let pageToken = "";
-  for (let i = 0; i < 5; i++) { // max 250 vidéos
-    const u = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${m[1]}&key=${key}${pageToken ? `&pageToken=${pageToken}` : ""}`;
-    const j = await fetch(u).then(r => r.json()).catch(() => ({}));
-    if (j.error) return { error: j.error?.message || "Erreur API YouTube." };
-    for (const it of (j.items || [])) {
-      const t = it.snippet?.title;
-      if (t && !/deleted video|private video/i.test(t)) titles.push(t);
+  const key = env.YOUTUBE_API_KEY;
+  if (key) {
+    const titles = [];
+    let pageToken = "", apiError = "";
+    for (let i = 0; i < 5; i++) { // max 250 vidéos
+      const u = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${m[1]}&key=${key}${pageToken ? `&pageToken=${pageToken}` : ""}`;
+      const j = await fetch(u).then(r => r.json()).catch(() => ({}));
+      if (j.error) { apiError = j.error?.message || "Erreur API YouTube."; break; }
+      for (const it of (j.items || [])) if (propre(it.snippet?.title)) titles.push(it.snippet.title);
+      if (!j.nextPageToken) break;
+      pageToken = j.nextPageToken;
     }
-    if (!j.nextPageToken) break;
-    pageToken = j.nextPageToken;
+    if (titles.length) return { titles };
+    if (apiError && !/quota/i.test(apiError)) { /* clé restreinte : on tente le repli HTML */ }
   }
-  return { titles };
+  const html = await fetchText(`https://www.youtube.com/playlist?list=${m[1]}`);
+  const titles = [
+    ...[...html.matchAll(/"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"/g)],
+    ...[...html.matchAll(/"playlistVideoRenderer":\{.*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/g)],
+  ].map((x) => { try { return JSON.parse(`"${x[1]}"`); } catch { return ""; } }).filter(propre);
+  if (!titles.length) return { error: "Playlist YouTube illisible (privée, vide, ou lien invalide)." };
+  return { titles: [...new Set(titles)] };
 }
 
 // Nettoie une description de vidéo : les liens, hashtags et blocs « réseaux sociaux »
@@ -628,11 +663,45 @@ export function cleanDescription(txt) {
 // simple trailer, ce qui ramenait les jeux des liens promo de la description.
 export function looksLikeMultiGameVideo(titre, description) {
   if (looksLikeListicle(titre)) return true;
-  if (/\b(?:top|best|meilleurs?|selection|sélection|classement|list[e]?)\b/i.test(titre || "")) return true;
+  if (/\b(?:top|best|meilleurs?|selection|sélection|classement|list[e]?|round\s?-?up|monthly|weekly|mensuel|hebdo|nouveaut[ée]s|coming (?:out|soon)|showcase|direct|wrap[\s-]?up)\b/i.test(titre || "")) return true;
   // sommaire numéroté ou chapitrage horodaté dans la description : « 1. Jeu », « 03:12 Jeu »
   const lignes = (description || "").split(/\r?\n/);
   const numerotees = lignes.filter((l) => /^\s*(?:\d{1,2}\s*[).\-–:]|\d{1,2}:\d{2})\s+\S/.test(l)).length;
-  return numerotees >= 4;
+  if (numerotees >= 4) return true;
+  // une description qui pointe 3 fiches Steam différentes présente forcément plusieurs jeux
+  return steamAppIdsFrom(description).length >= 3;
+}
+
+// Titre + description d'une vidéo, par ordre de fiabilité :
+//  1. l'API officielle — mais une clé restreinte « par référent HTTP » est refusée côté
+//     serveur (« Requests from referer <empty> are blocked ») : l'API renvoyait donc VIDE ;
+//  2. la page /watch, où « shortDescription » est toujours présent (aucune clé requise) ;
+//  3. oEmbed, qui ne donne que le titre.
+// Sans le point 2, toute vidéo « Top 10 » se réduisait à son titre → aucun jeu détecté.
+export async function youtubeMeta(url, env = {}) {
+  const m = String(url || "").match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})/);
+  if (!m) return { titre: "", description: "", error: "Lien YouTube invalide (identifiant de vidéo introuvable)." };
+  const id = m[1];
+  let titre = "", description = "", apiError = "";
+  if (env.YOUTUBE_API_KEY) {
+    const j = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${id}&key=${env.YOUTUBE_API_KEY}`)
+      .then((r) => r.json()).catch(() => ({}));
+    apiError = j?.error?.message || "";
+    const s = j.items?.[0]?.snippet;
+    if (s) { titre = s.title || ""; description = s.description || ""; }
+  }
+  if (!description) {
+    const html = await fetchText(`https://www.youtube.com/watch?v=${id}`);
+    const d = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
+    if (d) { try { description = JSON.parse(`"${d[1]}"`); } catch { /* description illisible : on garde le titre */ } }
+    if (!titre) titre = metaContent(html, "og:title") || "";
+  }
+  if (!titre) {
+    const j = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`)
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    titre = j?.title || "";
+  }
+  return { id, titre, description, apiError };
 }
 
 // Extrait les jeux d'UNE vidéo YouTube.
@@ -640,21 +709,10 @@ export function looksLikeMultiGameVideo(titre, description) {
 //  · vidéo sur un seul jeu         → le jeu du titre, sans toucher à la description ;
 //  · sans clé API ou sans LLM      → repli sur le titre via oEmbed (marche toujours).
 export async function youtubeVideoGames(url, env) {
-  const m = url.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{11})/);
-  if (!m) return { games: [], multi: false };
-  let titre = "", description = "";
-  if (env.YOUTUBE_API_KEY) {
-    const j = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${m[1]}&key=${env.YOUTUBE_API_KEY}`)
-      .then((r) => r.json()).catch(() => ({}));
-    const s = j.items?.[0]?.snippet;
-    if (s) { titre = s.title || ""; description = s.description || ""; }
-  }
-  if (!titre) {
-    const j = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`)
-      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    titre = j?.title || "";
-  }
-  if (!titre) return { games: [], multi: false, error: "Vidéo YouTube illisible (privée, supprimée ou lien invalide)." };
+  const meta = await youtubeMeta(url, env);
+  if (meta.error) return { games: [], multi: false, error: meta.error };
+  const { titre, description } = meta;
+  if (!titre && !description) return { games: [], multi: false, error: "Vidéo YouTube illisible (privée, supprimée ou lien invalide)." };
 
   const multi = looksLikeMultiGameVideo(titre, description);
   const seul = cleanTitle(titre);
@@ -663,13 +721,14 @@ export async function youtubeVideoGames(url, env) {
   const games = await llmExtractGamesFromPost(
     { titre, texte: cleanDescription(description), source: "vidéo YouTube" }, env
   );
+  if (games.length) return { games, multi: true, titreVideo: titre };
+  // repli sans IA (ou IA muette) : les fiches Steam liées dans la description
+  const liens = steamAppIdsFrom(description).map((id) => `https://store.steampowered.com/app/${id}`);
+  if (liens.length) return { games: liens, multi: true, titreVideo: titre };
   // sur une sélection, surtout PAS de repli sur le titre : « Top 10 des jeux PS5 »
   // deviendrait un faux jeu. On explique plutôt pourquoi la vidéo n'a rien donné.
-  if (!games.length) {
-    return { games: [], multi: true, titreVideo: titre,
-      error: `« ${titre.slice(0, 60)} » liste plusieurs jeux, mais sa description ne les nomme pas — les titres ne sont visibles que dans la vidéo. Copie-les à la main (un par ligne).` };
-  }
-  return { games, multi: true, titreVideo: titre };
+  return { games: [], multi: true, titreVideo: titre,
+    error: `« ${titre.slice(0, 60)} » liste plusieurs jeux, mais sa description ne les nomme pas — les titres ne sont visibles que dans la vidéo. Copie-les à la main (un par ligne).` };
 }
 
 // Extrait les jeux d'UN post / reel Instagram.
@@ -739,17 +798,33 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
     // extract = texte libre / document → on demande au LLM d'en extraire les titres
     if (extract) inputs.push(...(await llmExtractTitles(text, env)).map((q) => ({ q })));
     else {
+      const prose = []; // lignes de texte libre : regroupées pour une seule extraction IA
       for (const line of text.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) {
+        // playlist YouTube (/playlist?list=…) → tous les titres de la playlist
+        if (/youtube\.com\/playlist/.test(line) || (/[?&]list=/.test(line) && !/[?&]v=/.test(line) && /youtube\.com/.test(line))) {
+          const r = await youtubePlaylistTitles(line, env);
+          if (r.error) notes.push(r.error);
+          inputs.push(...(r.titles ?? []).map((q) => ({ q, reel: line })));
         // vidéo YouTube → un seul jeu si c'est un trailer, tous les jeux si c'est une sélection
-        if (/youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts/.test(line)) {
+        } else if (/youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts|youtube\.com\/live\//.test(line)) {
           const r = await youtubeVideoGames(line, env).catch(() => ({ games: [] }));
           if (r.error) notes.push(r.error);
+          if (/[?&]list=/.test(line)) notes.push("Ce lien appartient aussi à une playlist — pour importer TOUTE la playlist, colle son URL « /playlist?list=… ».");
           inputs.push(...r.games.map((q) => ({ q, reel: line })));
         } else if (/instagram\.com\//.test(line)) {
           const r = await instagramGames(line, env).catch(() => ({ games: [] }));
           if (r.error) notes.push(r.error);
           inputs.push(...r.games.map((q) => ({ q, reel: line })));
-        } else inputs.push({ q: line });
+        } else if (!isUrl(line) && looksLikeProse(line)) prose.push(line);
+        else inputs.push({ q: line }); // lien Steam / PS Store / autre, ou titre tapé
+      }
+      // paragraphe(s) collé(s) : une seule passe d'extraction IA sur l'ensemble
+      if (prose.length) {
+        const titres = await llmExtractTitles(prose.join("\n"), env);
+        if (titres.length) inputs.push(...titres.map((q) => ({ q })));
+        else notes.push(hasLLM(env)
+          ? "Aucun jeu reconnu dans le texte collé."
+          : "Texte libre : l'extraction automatique nécessite une clé IA (ANTHROPIC_API_KEY / OPENAI_API_KEY).");
       }
     }
   }
@@ -759,7 +834,7 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
   const seen = new Set(existingTitles.map(t => t.toLowerCase()));
   const out = [];
   const skipped = [];
-  const CONC = 4;
+  const CONC = 6; // une sélection « Top 30 » enrichit 30 jeux : sans parallélisme, c'est interminable
   for (let i = 0; i < inputs.length; i += CONC) {
     const batch = await Promise.all(inputs.slice(i, i + CONC).map(async (item) => {
       const inp = item.q;
@@ -893,4 +968,26 @@ export async function detectCandidates(query, env, existingTitles = [], max = 6)
     for (const g of batch) if (g && !out.some(o => o.titre.toLowerCase() === g.titre.toLowerCase())) out.push(g);
   }
   return { games: out };
+}
+
+// ─── point d'entrée unique ─────────────────────────────────────────────
+// Un seul champ pour tout : lien YouTube (trailer ou « Top 10 »), playlist, lien Steam /
+// PS Store / Instagram / n'importe quelle boutique, un titre tapé, une liste de titres
+// (un par ligne), ou un paragraphe entier. On choisit ici la bonne stratégie :
+//  · un titre seul       → plusieurs candidats à cocher (God of War 1 / 2 / 3…) ;
+//  · tout le reste       → détection + enrichissement de chaque jeu trouvé.
+export async function detectAnything(input, env, existingTitles = []) {
+  const raw = String(input || "").trim();
+  if (!raw) return { games: [], skipped: [], notes: [], mode: "vide" };
+
+  const lignes = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  // un seul titre tapé (ni lien, ni phrase) → on propose les candidats à choisir
+  if (lignes.length === 1 && !isUrl(lignes[0]) && !looksLikeProse(lignes[0])) {
+    const r = await detectCandidates(lignes[0], env, existingTitles);
+    if (r.games.length) return { games: r.games, skipped: [], notes: [], mode: "candidats" };
+    // aucun candidat : on retente en passant par la détection générale (typos, titres exotiques)
+  }
+  const res = await detectMany({ text: raw }, env, existingTitles);
+  if (res.error) return { games: [], skipped: [], notes: [res.error], mode: "erreur" };
+  return { games: res.games, skipped: res.skipped ?? [], notes: res.notes ?? [], mode: "liste" };
 }

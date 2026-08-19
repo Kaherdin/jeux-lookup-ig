@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
 import { fetchSteamLibrary } from "@/lib/steam";
-import { detectTitle, enrichGame, detectMany, detectCandidates, igdbDiscover } from "@/lib/enrich.mjs";
+import { detectTitle, enrichGame, detectAnything, igdbDiscover } from "@/lib/enrich.mjs";
 import type { PreviewGame } from "@/lib/types";
 
 const env = () => ({
@@ -62,30 +62,23 @@ export const addGame = authActionClient
     return { added: true, titre: g.titre, source: det.source };
   });
 
-export const detectGames = authActionClient
-  .inputSchema(z.object({ slug: z.string(), text: z.string().optional(), playlist: z.string().optional(), extract: z.boolean().optional() }))
-  .action(async ({ parsedInput: { slug, text, playlist, extract }, ctx }) => {
+// Champ unique : lien YouTube (trailer ou « Top 10 »), playlist, lien Steam / PS Store /
+// Instagram / autre boutique, un titre, une liste de titres, ou un texte libre.
+// C'est detectAnything qui choisit la stratégie — l'interface n'a plus rien à deviner.
+export const analyzeInput = authActionClient
+  .inputSchema(z.object({ slug: z.string(), input: z.string().min(1) }))
+  .action(async ({ parsedInput: { slug, input }, ctx }) => {
     if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Analyse limitée — réessaie dans une minute.");
     const list = await assertCanEdit(slug, ctx.user.id);
     const existing = await getTitles(list.id);
-    const res = await detectMany({ text: text || "", playlist: playlist || "", extract: !!extract }, env(), existing);
-    if (res.error) throw new Error(res.error);
+    const res = await detectAnything(input, env(), existing);
     return {
       games: res.games as PreviewGame[],
       skipped: (res.skipped ?? []) as string[],
       notes: (res.notes ?? []) as string[],
+      // « candidats » = un titre tapé → on ne préselectionne que le premier
+      mode: (res.mode ?? "liste") as string,
     };
-  });
-
-// recherche multi-candidats pour un titre tapé (God of Wa → God of War 1/2/3…)
-export const searchGames = authActionClient
-  .inputSchema(z.object({ slug: z.string(), query: z.string() }))
-  .action(async ({ parsedInput: { slug, query }, ctx }) => {
-    if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Recherche limitée — réessaie dans une minute.");
-    const list = await assertCanEdit(slug, ctx.user.id);
-    const existing = await getTitles(list.id);
-    const res = await detectCandidates(query, env(), existing);
-    return { games: res.games as PreviewGame[] };
   });
 
 // moteur de découverte IGDB (filtres plateforme / genre / mode / coop local / joueurs / note)

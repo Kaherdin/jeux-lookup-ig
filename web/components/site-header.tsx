@@ -8,7 +8,9 @@ import { UserMenu } from "./user-menu";
 import { CreateListDialog } from "./create-list-dialog";
 import { Button } from "@/components/ui/button";
 
-export async function SiteHeader({ currentSlug, currentName }: { currentSlug: string; currentName: string }) {
+export async function SiteHeader({
+  currentSlug, currentName, canEdit = false,
+}: { currentSlug: string; currentName: string; canEdit?: boolean }) {
   const session = await getSession();
   const [publicRaw, userRaw] = await Promise.all([
     getPublicLists(),
@@ -37,7 +39,11 @@ export async function SiteHeader({ currentSlug, currentName }: { currentSlug: st
             <Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> <span className="hidden sm:inline">Trouver</span></Link>
           </Button>
           <ThemeToggle />
-          <UserMenu user={session?.user ?? null} />
+          <UserMenu
+            user={session?.user ?? null}
+            rescanSlug={canEdit && currentSlug ? currentSlug : undefined}
+            rescanName={currentName}
+          />
         </div>
       </div>
     </header>
