@@ -19,13 +19,22 @@ const PLATFORMS: [number, string][] = [[6, "PC"], [167, "PS5"], [48, "PS4"], [13
 const FAMILLES = CATEGORIES.filter((c) => c.igdbGenres.length || c.igdbThemes.length);
 const MODES: [number, string][] = [[1, "Solo"], [2, "Multi"], [3, "Coop"], [6, "Battle Royale"]];
 
-export function DiscoverView({ lists }: { lists: { slug: string; name: string }[] }) {
+export function DiscoverView({
+  lists, embedded = false, famillesInitiales, noteMinInitiale,
+}: {
+  lists: { slug: string; name: string }[];
+  /** rendu à l'intérieur de la page principale : pas de titre ni de fil d'Ariane */
+  embedded?: boolean;
+  /** reprend les critères déjà posés sur la collection — même vocabulaire des deux côtés */
+  famillesInitiales?: string[];
+  noteMinInitiale?: number;
+}) {
   const [platforms, setPlatforms] = useState<Set<number>>(new Set());
-  const [familles, setFamilles] = useState<Set<string>>(new Set());
+  const [familles, setFamilles] = useState<Set<string>>(() => new Set(famillesInitiales ?? []));
   const [modes, setModes] = useState<Set<number>>(new Set());
   const [coopLocal, setCoopLocal] = useState(false);
   const [playersMin, setPlayersMin] = useState("0");
-  const [noteMin, setNoteMin] = useState("0");
+  const [noteMin, setNoteMin] = useState(noteMinInitiale ? String(noteMinInitiale) : "0");
   const [sinceYear, setSinceYear] = useState("0");
   const [sort, setSort] = useState<"pop" | "note" | "recent">("pop");
   const [target, setTarget] = useState(lists[0]?.slug ?? "");
@@ -63,11 +72,13 @@ export function DiscoverView({ lists }: { lists: { slug: string; name: string }[
   }
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-6">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-2xl font-bold"><Search className="h-6 w-6" /> Trouver un jeu</h1>
-        <Link href="/" className="text-sm text-muted-foreground hover:text-foreground">← Retour aux listes</Link>
-      </div>
+    <div className={embedded ? "" : "mx-auto max-w-[1500px] px-4 py-6"}>
+      {!embedded && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="flex items-center gap-2 text-2xl font-bold"><Search className="h-6 w-6" /> Trouver un jeu</h1>
+          <Link href="/" className="text-sm text-muted-foreground hover:text-foreground">← Retour aux listes</Link>
+        </div>
+      )}
 
       <div className="space-y-4 rounded-xl border bg-card p-4">
         <Field label="Plateforme"><ChipGroup opts={PLATFORMS} sel={platforms} setSel={setPlatforms} /></Field>
@@ -118,6 +129,12 @@ export function DiscoverView({ lists }: { lists: { slug: string; name: string }[
         </div>
       </div>
 
+      {!results && !search.isPending && (
+        <p className="mt-6 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+          Les jeux affichés ici viennent d&apos;IGDB, pas de tes listes — coche des critères et lance la recherche.
+        </p>
+      )}
+
       {results && (
         results.length === 0 ? (
           <p className="mt-6 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Aucun résultat — essaie d&apos;élargir les filtres.</p>
@@ -146,7 +163,7 @@ export function DiscoverView({ lists }: { lists: { slug: string; name: string }[
           </div>
         )
       )}
-    </main>
+    </div>
   );
 }
 

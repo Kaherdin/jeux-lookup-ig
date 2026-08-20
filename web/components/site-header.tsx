@@ -36,7 +36,7 @@ export async function SiteHeader({
             </Button>
           )}
           <Button asChild variant="ghost" size="sm">
-            <Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> <span className="hidden sm:inline">Trouver</span></Link>
+            <Link href="/?vue=decouvrir"><Search className="mr-1 h-4 w-4" /> <span className="hidden sm:inline">Trouver</span></Link>
           </Button>
           <ThemeToggle />
           <UserMenu
