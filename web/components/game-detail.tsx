@@ -67,6 +67,16 @@ export function GameDetail({
         {n != null && <Badge variant="outline">⭐ {n} {g.noteSource ? `(${g.noteSource})` : ""}</Badge>}
         {g.envergure && <Badge variant="outline">{g.envergure}</Badge>}
         {g.dureeVie && <Badge variant="outline">⏱ {g.dureeVie}</Badge>}
+        {!!(g.steamAvis || g.igdbVotes) && (
+          <Badge variant="outline" title="avis Steam / votes IGDB">
+            👥 {(g.steamAvis || g.igdbVotes)!.toLocaleString("fr-CH")} avis
+          </Badge>
+        )}
+        {!!g.joueursSteam && (
+          <Badge variant="outline" title="joueurs connectés au moment du scan">
+            🔥 {g.joueursSteam.toLocaleString("fr-CH")} joueurs
+          </Badge>
+        )}
         {g.sortieISO && <Badge variant="outline">{g.sortieISO}</Badge>}
         {g.plateformes.map((pl, i) => <Badge key={i} variant="secondary">{pl}</Badge>)}
       </div>

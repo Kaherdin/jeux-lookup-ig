@@ -166,6 +166,15 @@ export async function steamReviews(appid) {
   };
 }
 
+// Joueurs connectés en ce moment (API publique Steam, sans clé) — indicateur de
+// popularité vivante, complémentaire du nombre d'avis qui, lui, ne bouge plus.
+export async function steamPlayers(appid) {
+  const u = `https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=${appid}`;
+  const j = await fetch(u).then((r) => r.json()).catch(() => null);
+  const n = j?.response?.player_count;
+  return Number.isFinite(n) ? n : null;
+}
+
 // --- IGDB -------------------------------------------------------------
 let igdbToken = null;
 async function igdbAuth(env) {
@@ -535,10 +544,11 @@ export async function enrichGame(rec, env) {
   // si un ID IGDB est fourni (candidat choisi), on l'épingle au lieu de re-chercher (données cohérentes)
   const igdbP = rec.igdbId ? igdbById(rec.igdbId, env) : igdbLookup(title, env);
   if (!appid) { const s = await steamSearch(title); if (s) appid = s.appid; }
-  const [igdb, steam, reviews, itadId] = await Promise.all([
+  const [igdb, steam, reviews, joueursSteam, itadId] = await Promise.all([
     igdbP,
     appid ? steamDetails(appid) : null,
     appid ? steamReviews(appid) : null,
+    appid ? steamPlayers(appid) : null,
     itadLookup(appid, title, env),
   ]);
   const prix = itadId ? await itadPrices(itadId, env) : null;
@@ -606,6 +616,7 @@ export async function enrichGame(rec, env) {
     noteCritique: igdb?.note ?? steam?.metacritic ?? null,
     metacritic: steam?.metacritic ?? null,
     steamPct: reviews?.pct ?? null, steamAvis: reviews?.count ?? null, steamDesc: reviews?.desc ?? "",
+    joueursSteam, igdbVotes: igdb?.totalRatingCount || null,
     modes,
     modesDetail: { ...(steam?.detail || {}), splitscreen: igdb?.splitscreen || undefined, lancoop: igdb?.lancoop || undefined },
     coop: modes.coop ? "Oui" : (coopCsv || ""),

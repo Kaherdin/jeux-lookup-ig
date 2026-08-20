@@ -43,6 +43,15 @@ const sortieVal = (g: Game) => {
   const an = (g.sortiePrec ?? "").match(/\d{4}/);
   return an ? `${an[0]}-12-31` : "9999";
 };
+/**
+ * Popularité : avis Steam cumulés, ou votes IGDB pour les jeux hors Steam.
+ * Les joueurs connectés (`joueursSteam`) sont affichés à part — c'est une photo
+ * prise au moment du scan, pas une valeur de tri fiable.
+ */
+const popuVal = (g: Game) => Math.max(g.steamAvis ?? 0, g.igdbVotes ?? 0);
+/** 1 234 → « 1,2k » ; 45 678 → « 46k » */
+const fmtNb = (n: number) =>
+  n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1).replace(".", ",")}k` : String(n);
 /** « ~12h », « 100h+ » → 12, 100 (pour trier ; -1 quand on ne sait pas) */
 const dureeVal = (g: Game) => { const m = (g.dureeVie ?? "").match(/\d+/); return m ? +m[0] : -1; };
 const noteColor = (n: number) => (n >= 85 ? "#3fb950" : n >= 75 ? "#f5c518" : n >= 60 ? "#ff8c42" : "#f85149");
@@ -87,9 +96,10 @@ const SORT_VAL: Record<string, (g: Game) => number | string> = {
   joueurs: (g) => g.nbJoueursMax ?? -1,
   sortie: sortieVal,
   duree: dureeVal,
+  popu: popuVal,
 };
-const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1 };
-const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", titre: "Titre" };
+const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1, popu: -1 };
+const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", popu: "Popularité", titre: "Titre" };
 
 // filtres à cocher, regroupés par thème pour que le panneau reste lisible
 type FilterDef = { key: string; label: string; test: (g: Game, owned: Set<string>) => boolean };
@@ -563,6 +573,18 @@ function EmptyState({ titre, texte, action }: { titre: string; texte: string; ac
   );
 }
 
+/** popularité sous la note : avis cumulés, et joueurs connectés quand on les a */
+function Popularite({ g }: { g: Game }) {
+  const pop = popuVal(g);
+  if (!pop && !g.joueursSteam) return null;
+  return (
+    <div className="mt-0.5 flex flex-wrap gap-x-1.5 text-[10px] text-muted-foreground">
+      {pop > 0 && <span title={`${pop.toLocaleString("fr-CH")} avis / votes`}>👥 {fmtNb(pop)}</span>}
+      {!!g.joueursSteam && <span title="joueurs connectés au moment du scan">🔥 {fmtNb(g.joueursSteam)}</span>}
+    </div>
+  );
+}
+
 /**
  * Vignette du tableau : format 16/9 lisible, et au survol elle joue le trailer —
  * le mp4 Steam quand on l'a (léger, démarrage immédiat), sinon la vidéo YouTube IGDB.
@@ -699,6 +721,7 @@ const Row = memo(function Row({
             )}
           </>
         )}
+        <Popularite g={g} />
       </td>
       <td className="hidden p-2.5 md:table-cell">{g.nbJoueurs || <span className="text-muted-foreground">—</span>}</td>
       <td className="hidden p-2.5 whitespace-nowrap md:table-cell">

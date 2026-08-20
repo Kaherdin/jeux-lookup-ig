@@ -120,6 +120,9 @@ model Game {
   noteSource     String?
   metacritic     Int?
   steamPct       Int?
+  steamAvis      Int? // nombre d'avis Steam — popularité cumulée
+  joueursSteam   Int? // joueurs connectés au moment du scan — popularité vivante
+  igdbVotes      Int? // votes IGDB — prend le relais pour les jeux hors Steam
   modes          Json?
   modesDetail    Json?
   nbJoueurs      String?

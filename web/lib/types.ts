@@ -49,6 +49,9 @@ export type Game = {
   noteSource: string | null;
   metacritic: number | null;
   steamPct: number | null;
+  steamAvis: number | null;
+  joueursSteam: number | null;
+  igdbVotes: number | null;
   modes: Modes;
   modesDetail: ModesDetail;
   nbJoueurs: string | null;
