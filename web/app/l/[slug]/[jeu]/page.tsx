@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
-import { getListBySlug, getGames, getVisibleLists } from "@/lib/store";
+import { getListBySlug, getGames, getVisibleLists, getGameFull } from "@/lib/store";
 import { getSession } from "@/lib/session";
 import { slugifyTitle } from "@/lib/utils";
 import { SiteHeader } from "@/components/site-header";
@@ -18,8 +18,10 @@ export default async function Page({ params }: { params: Promise<{ slug: string;
   const [games, session] = await Promise.all([getGames(list.id), getSession()]);
   const lists = await getVisibleLists(session?.user?.id);
   // les jeux n'ont pas de slug en base : on retrouve celui dont le titre donne la même URL
-  const game = games.find((g) => slugifyTitle(g.titre) === jeu);
-  if (!game) notFound();
+  const trouve = games.find((g) => slugifyTitle(g.titre) === jeu);
+  if (!trouve) notFound();
+  // la liste ne transporte plus les captures ni la description : la fiche les relit
+  const game = (await getGameFull(trouve.id)) ?? trouve;
 
   const canManage = !!session?.user && (list.ownerId === null || list.ownerId === session.user.id);
 

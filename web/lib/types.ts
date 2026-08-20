@@ -1,3 +1,5 @@
+import type { CategoryKey } from "./categories";
+
 export type Prix = {
   meilleur?: number | null;
   devise?: string;
@@ -30,9 +32,9 @@ export type Game = {
   genre: string | null;
   univers: string | null;
   plateformes: string[];
-  screenshots: string[];
+  screenshots?: string[];
   trailer: string | null;
-  trailerThumb: string | null;
+  trailerThumb?: string | null;
   trailerYoutube: string | null;
   sortieISO: string | null;
   sortiePrec: string | null;
@@ -59,16 +61,20 @@ export type Game = {
   joueursLocalMax: number | null;
   joueursOnlineMax: number | null;
   themes: string | null;
-  developpeur: string | null;
-  editeur: string | null;
-  description: string | null;
+  developpeur?: string | null;
+  editeur?: string | null;
+  description?: string | null;
   envergure: string | null;
   dureeVie: string | null;
-  tailleEquipe: string | null;
+  tailleEquipe?: string | null;
   urlSteam: string | null;
   urlStore: string | null;
   urlPsn: string | null;
-  reel: string | null;
+  reel?: string | null;
+  /** date d'ajout (à défaut, la date de création en base) */
+  ajouteLe?: string | null;
+  /** familles de jeux, calculées côté serveur pour ne pas les recalculer à chaque rendu */
+  cats?: CategoryKey[];
   /** liste d'origine — renseigné uniquement dans les vues qui agrègent plusieurs listes */
   listSlug?: string;
 };

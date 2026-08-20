@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, slugifyTitle } from "@/lib/utils";
+import { useAction } from "next-safe-action/hooks";
+import { gameDetail } from "@/app/actions/games";
 import { SelectionBar } from "@/components/selection-bar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CATEGORIES, CATEGORY_BY_KEY, categorize, type CategoryKey } from "@/lib/categories";
@@ -28,6 +30,9 @@ const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
 const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
 const md = (g: Game) => g.modes ?? {};
 const TODAY = new Date().toISOString().slice(0, 10);
+/** ajouté il y a moins de 7 jours — étiquette temporaire et remontée en tête de liste */
+const IL_Y_A_7J = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+const estRecent = (g: Game) => !!g.ajouteLe && g.ajouteLe >= IL_Y_A_7J;
 /** pas encore sortie : le drapeau Steam, ou une date de sortie dans le futur */
 const aVenir = (g: Game) => !!g.comingSoon || (!!g.sortieISO && g.sortieISO > TODAY.slice(0, g.sortieISO.length));
 /** envergure : « Indé » (LLM/heuristique) vs « AA » / « AAA » */
@@ -67,6 +72,12 @@ function fmtDate(iso: string | null) {
   const today = new Date().toISOString().slice(0, 10);
   return { txt, released: iso <= today.slice(0, iso.length) };
 }
+/** « 2026-08-14 » → « 14 août » (l'année n'apparaît que si ce n'est pas cette année) */
+function fmtJour(iso: string) {
+  const p = iso.split("-");
+  if (p.length < 3) return iso;
+  return `${+p[2]} ${MOIS[+p[1] - 1].slice(0, 4)}${p[0] === TODAY.slice(0, 4) ? "" : " " + p[0]}`;
+}
 function modesDetailText(g: Game) {
   const d = g.modesDetail ?? {};
   const out: string[] = [];
@@ -97,9 +108,10 @@ const SORT_VAL: Record<string, (g: Game) => number | string> = {
   sortie: sortieVal,
   duree: dureeVal,
   popu: popuVal,
+  ajout: (g) => g.ajouteLe ?? "",
 };
-const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1, popu: -1 };
-const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", popu: "Popularité", titre: "Titre" };
+const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1, popu: -1, ajout: -1 };
+const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", popu: "Popularité", ajout: "Ajout", titre: "Titre" };
 
 // filtres à cocher, regroupés par thème pour que le panneau reste lisible
 type FilterDef = { key: string; label: string; test: (g: Game, owned: Set<string>) => boolean };
@@ -269,7 +281,7 @@ export function GamesView({
       g,
       key: g.titre.toLowerCase(),
       hay: `${g.titre} ${g.genre ?? ""} ${g.univers ?? ""}`.toLowerCase(),
-      cats: categorize(g),
+      cats: g.cats ?? categorize(g),
     })),
     [games]
   );
@@ -313,6 +325,9 @@ export function GamesView({
     const l = index.filter((it) => keep(it));
     const val = SORT_VAL[sortKey] ?? SORT_VAL.note;
     l.sort((a, b) => {
+      // ce qu'on vient d'ajouter reste en tête quel que soit le tri, pendant 7 jours
+      const ra = estRecent(a.g) ? 1 : 0, rb = estRecent(b.g) ? 1 : 0;
+      if (ra !== rb) return rb - ra;
       const va = val(a.g), vb = val(b.g);
       const r = va < vb ? -1 : va > vb ? 1 : 0;
       return r * sortDir || a.g.titre.localeCompare(b.g.titre);
@@ -396,7 +411,12 @@ export function GamesView({
     [games]
   );
 
-  const onOpen = useCallback((g: Game) => setFiche(g), []);
+  // le tableau ne transporte plus les captures ni la description : on va chercher le
+  // reste de la fiche à l'ouverture, et on l'affiche par-dessus ce qu'on a déjà.
+  const detail = useAction(gameDetail);
+  const onOpen = useCallback((g: Game) => { setFiche(g); detail.execute({ id: g.id }); }, [detail]);
+  const complet = detail.result?.data?.game as unknown as Game | undefined;
+  const ficheAffichee = fiche && complet?.id === fiche.id ? { ...fiche, ...complet } : fiche;
 
   const onCheck = useCallback((id: string, c: boolean) => {
     setSelected((prev) => { const n = new Set(prev); c ? n.add(id) : n.delete(id); return n; });
@@ -601,10 +621,10 @@ export function GamesView({
       <Dialog open={!!fiche} onOpenChange={(o) => { if (!o) setFiche(null); }}>
         <DialogContent className="max-h-[92vh] gap-0 overflow-y-auto sm:max-w-4xl">
           <DialogTitle className="sr-only">{fiche?.titre ?? "Fiche du jeu"}</DialogTitle>
-          {fiche && (
+          {ficheAffichee && (
             <>
-              <GameDetail g={fiche} slug={fiche.listSlug ?? list.slug} canManage={canManage} lists={lists} />
-              <Link href={`/l/${fiche.listSlug ?? list.slug}/${slugifyTitle(fiche.titre)}`}
+              <GameDetail g={ficheAffichee} slug={ficheAffichee.listSlug ?? list.slug} canManage={canManage} lists={lists} />
+              <Link href={`/l/${ficheAffichee.listSlug ?? list.slug}/${slugifyTitle(ficheAffichee.titre)}`}
                 className="mt-4 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline">
                 Ouvrir la fiche complète ↗
               </Link>
@@ -772,6 +792,7 @@ const Row = memo(function Row({
             <div className="truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
             <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
               {g.dureeVie && <span title="durée de vie approximative">⏱ {g.dureeVie}</span>}
+              {g.ajouteLe && <span title={`ajouté le ${g.ajouteLe}`}>+ {fmtJour(g.ajouteLe)}</span>}
               {g.urlSteam && <a href={g.urlSteam} target="_blank" rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()} className="hover:text-primary hover:underline">Steam ↗</a>}
               {g.urlPsn && <a href={g.urlPsn} target="_blank" rel="noopener noreferrer"
@@ -791,6 +812,7 @@ const Row = memo(function Row({
           {g.bienNote && <Tag className="bg-yellow-500/15 text-yellow-500">⭐ Top</Tag>}
           {aVenir(g) && <Tag className="bg-muted text-muted-foreground">🔜 À venir</Tag>}
           {estInde(g) && <Tag className="bg-fuchsia-500/15 text-fuchsia-400">🎨 Indé</Tag>}
+          {estRecent(g) && <Tag className="bg-primary/15 text-primary">🆕 Ajout récent</Tag>}
           {!possede && !g.dispo && !g.gratuit && !g.bonPlan && !g.bienNote && !aVenir(g) && !g.envergure && <span className="text-muted-foreground">—</span>}
         </div>
       </td>

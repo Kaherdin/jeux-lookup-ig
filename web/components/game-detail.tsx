@@ -114,7 +114,7 @@ export function GameDetail({
         </div>
       ) : null}
 
-      {g.screenshots?.length > 0 && <GameGallery screenshots={g.screenshots} titre={g.titre} />}
+      {!!g.screenshots?.length && <GameGallery screenshots={g.screenshots} titre={g.titre} />}
 
       {!g.trailer && !g.trailerYoutube && !g.screenshots?.length && (
         <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
@@ -164,7 +164,7 @@ function DebugPanel({ g }: { g: Game }) {
     ["nbJoueurs", g.nbJoueurs], ["nbJoueursMax", g.nbJoueursMax], ["joueursLocalMax", g.joueursLocalMax], ["joueursOnlineMax", g.joueursOnlineMax],
     ["modes", JSON.stringify(g.modes)], ["modesDetail", JSON.stringify(g.modesDetail)],
     ["developpeur", g.developpeur], ["editeur", g.editeur], ["envergure", g.envergure], ["dureeVie", g.dureeVie], ["tailleEquipe", g.tailleEquipe], ["themes", g.themes],
-    ["image", g.image], ["screenshots", g.screenshots?.length], ["trailer", g.trailer], ["trailerYoutube", g.trailerYoutube],
+    ["image", g.image], ["screenshots", g.screenshots?.length ?? 0], ["trailer", g.trailer], ["trailerYoutube", g.trailerYoutube],
     ["urlSteam", g.urlSteam], ["urlPsn", g.urlPsn], ["description", g.description],
   ];
   const isEmpty = (v: unknown) => v === null || v === undefined || v === "" || v === 0;

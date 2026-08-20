@@ -2,7 +2,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { authActionClient, openActionClient } from "@/lib/safe-action";
-import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, deleteGame } from "@/lib/store";
+import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, deleteGame, invalidateCaches, getGameFull } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
@@ -64,6 +64,9 @@ async function assertCanManage(slug: string, user: Actor) {
 }
 
 function revalidate(slug: string) {
+  // le cache de données doit tomber en même temps que les pages, sinon les listes
+  // continueraient d'être servies depuis l'instantané précédent
+  invalidateCaches();
   revalidatePath("/");
   revalidatePath(`/l/${slug}`);
 }
@@ -153,6 +156,16 @@ export const addDiscovered = openActionClient
     await upsertGame(list.id, g);
     revalidate(slug);
     return { titre: g.titre, duplicate: false };
+  });
+
+// la fiche complète d'un jeu (captures, description, crédits) — le tableau ne les
+// transporte plus, on va les chercher à l'ouverture de la modale
+export const gameDetail = openActionClient
+  .inputSchema(z.object({ id: z.string() }))
+  .action(async ({ parsedInput: { id } }) => {
+    const g = await getGameFull(id);
+    if (!g) throw new Error("Jeu introuvable.");
+    return { game: g };
   });
 
 export type DiscoverGame = {
