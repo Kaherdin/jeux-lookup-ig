@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef, useDeferredValue, memo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Search, SlidersHorizontal, X, Check } from "lucide-react";
 import type { Game, ListMeta } from "@/lib/types";
 import { Input } from "@/components/ui/input";
@@ -10,7 +11,17 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, slugifyTitle } from "@/lib/utils";
 import { SelectionBar } from "@/components/selection-bar";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CATEGORIES, CATEGORY_BY_KEY, categorize, type CategoryKey } from "@/lib/categories";
+
+// la fiche (et sa lightbox) ne sont chargées qu'à la première ouverture de la modale :
+// inutile de les faire porter à la page de liste, qui doit rester légère.
+const GameDetail = dynamic(() => import("@/components/game-detail").then((m) => m.GameDetail), {
+  loading: () => <div className="py-16 text-center text-sm text-muted-foreground">Chargement…</div>,
+});
+
+/** clic « normal » : sans modificateur ni clic du milieu — sinon on laisse le lien faire */
+const clicSimple = (e: React.MouseEvent) => !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
 
 const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
@@ -168,6 +179,7 @@ export function GamesView({
   const [panel, setPanel] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [limit, setLimit] = useState(PAGE);
+  const [fiche, setFiche] = useState<Game | null>(null);
 
   // la frappe reste fluide : le filtrage utilise une valeur « en retard » que React
   // recalcule en tâche de fond pendant que l'input, lui, répond au clavier.
@@ -323,6 +335,8 @@ export function GamesView({
     () => games.filter((g) => g.dispo && g.bienNote).sort((a, b) => (noteVal(b) ?? 0) - (noteVal(a) ?? 0)).slice(0, 10),
     [games]
   );
+
+  const onOpen = useCallback((g: Game) => setFiche(g), []);
 
   const onCheck = useCallback((id: string, c: boolean) => {
     setSelected((prev) => { const n = new Set(prev); c ? n.add(id) : n.delete(id); return n; });
@@ -506,7 +520,7 @@ export function GamesView({
                   <Row key={it.g.id} g={it.g} slug={it.g.listSlug ?? list.slug}
                     possede={showOwned && owned.has(it.key)}
                     checked={selected.has(it.g.id)}
-                    onCheck={onCheck} />
+                    onCheck={onCheck} onOpen={onOpen} />
                 ))}
               </tbody>
             </table>
@@ -520,6 +534,23 @@ export function GamesView({
           )}
         </>
       )}
+
+      {/* clic sur un jeu = grande modale ; ⌘/ctrl-clic ou clic du milieu ouvrent
+          toujours la vraie page dans un onglet, le lien est un <a> normal */}
+      <Dialog open={!!fiche} onOpenChange={(o) => { if (!o) setFiche(null); }}>
+        <DialogContent className="max-h-[92vh] gap-0 overflow-y-auto sm:max-w-4xl">
+          <DialogTitle className="sr-only">{fiche?.titre ?? "Fiche du jeu"}</DialogTitle>
+          {fiche && (
+            <>
+              <GameDetail g={fiche} slug={fiche.listSlug ?? list.slug} canManage={canManage} lists={lists} />
+              <Link href={`/l/${fiche.listSlug ?? list.slug}/${slugifyTitle(fiche.titre)}`}
+                className="mt-4 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline">
+                Ouvrir la fiche complète ↗
+              </Link>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <SelectionBar games={selectedGames} lists={lists} currentSlug={list.slug}
         onClear={() => setSelected(new Set())} canManage={canManage} />
@@ -557,7 +588,7 @@ function EmptyState({ titre, texte, action }: { titre: string; texte: string; ac
  * ne déclenche pas 30 lecteurs. Elle est en `pointer-events-none` par-dessus l'image,
  * donc le survol et le clic continuent d'appartenir au lien vers la fiche.
  */
-function Thumb({ g, href }: { g: Game; href: string }) {
+function Thumb({ g, href, onOpen }: { g: Game; href: string; onOpen: () => void }) {
   const [playing, setPlaying] = useState(false);
   const [ready, setReady] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -602,6 +633,7 @@ function Thumb({ g, href }: { g: Game; href: string }) {
       {/* le lien couvre la vignette : la vidéo est en dessous et inerte, donc survol
           et clic restent au lien, et on n'imbrique pas d'iframe dans un <a> */}
       <Link href={href} onFocus={enter} onBlur={leave} aria-label={g.titre}
+        onClick={(e) => { if (clicSimple(e)) { e.preventDefault(); onOpen(); } }}
         className="absolute inset-0 rounded-md ring-primary transition group-hover:ring-2 focus-visible:ring-2 focus-visible:outline-none" />
     </div>
   );
@@ -610,8 +642,11 @@ function Thumb({ g, href }: { g: Game; href: string }) {
 // mémoïsée : une frappe ou un clic de filtre ne re-rend que les lignes qui changent
 // vraiment (props toutes primitives, `onCheck` stable côté parent).
 const Row = memo(function Row({
-  g, slug, possede, checked, onCheck,
-}: { g: Game; slug: string; possede: boolean; checked: boolean; onCheck: (id: string, c: boolean) => void }) {
+  g, slug, possede, checked, onCheck, onOpen,
+}: {
+  g: Game; slug: string; possede: boolean; checked: boolean;
+  onCheck: (id: string, c: boolean) => void; onOpen: (g: Game) => void;
+}) {
   const m = md(g);
   const p = prixVal(g);
   const n = noteVal(g);
@@ -626,9 +661,10 @@ const Row = memo(function Row({
       </td>
       <td className="p-2.5">
         <div className="flex items-center gap-3">
-          <Thumb g={g} href={`/l/${slug}/${slugifyTitle(g.titre)}`} />
+          <Thumb g={g} href={`/l/${slug}/${slugifyTitle(g.titre)}`} onOpen={() => onOpen(g)} />
           <div className="min-w-0">
             <Link href={`/l/${slug}/${slugifyTitle(g.titre)}`}
+              onClick={(e) => { if (clicSimple(e)) { e.preventDefault(); onOpen(g); } }}
               className="block max-w-[230px] truncate text-left font-bold hover:text-primary hover:underline">{g.titre}</Link>
             <div className="max-w-[230px] truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
           </div>

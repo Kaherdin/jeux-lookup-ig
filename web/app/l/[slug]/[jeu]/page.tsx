@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
-import { getListBySlug, getGames } from "@/lib/store";
+import { getListBySlug, getGames, getVisibleLists } from "@/lib/store";
 import { getSession } from "@/lib/session";
 import { slugifyTitle } from "@/lib/utils";
 import { SiteHeader } from "@/components/site-header";
@@ -16,6 +16,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string;
   if (!list) notFound();
 
   const [games, session] = await Promise.all([getGames(list.id), getSession()]);
+  const lists = await getVisibleLists(session?.user?.id);
   // les jeux n'ont pas de slug en base : on retrouve celui dont le titre donne la même URL
   const game = games.find((g) => slugifyTitle(g.titre) === jeu);
   if (!game) notFound();
@@ -30,7 +31,8 @@ export default async function Page({ params }: { params: Promise<{ slug: string;
           className="mb-4 inline-flex items-center text-sm text-muted-foreground transition hover:text-foreground">
           <ChevronLeft className="mr-1 h-4 w-4" /> {list.name}
         </Link>
-        <GameDetail g={game as unknown as Game} slug={list.slug} canManage={canManage} />
+        <GameDetail g={game as unknown as Game} slug={list.slug} canManage={canManage}
+          lists={lists.map((l) => ({ slug: l.slug, name: l.name }))} />
       </main>
     </>
   );
