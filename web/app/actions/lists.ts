@@ -3,7 +3,7 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { authActionClient, openActionClient } from "@/lib/safe-action";
 import { prisma } from "@/lib/prisma";
-import { createList } from "@/lib/store";
+import { createList, invalidateCaches } from "@/lib/store";
 import { allow } from "@/lib/ratelimit";
 
 function slugify(s: string) {
@@ -38,6 +38,7 @@ export const createNewList = openActionClient
       name, slug, description: description || null, isPublic,
       ownerId: ctx.user?.id ?? null,
     });
+    invalidateCaches();
     revalidatePath("/");
     return { slug: list.slug, name: list.name };
   });
@@ -49,6 +50,7 @@ export const deleteList = authActionClient
     if (!list) throw new Error("Liste introuvable.");
     if (list.ownerId !== ctx.user.id) throw new Error("Cette liste ne t'appartient pas.");
     await prisma.list.delete({ where: { id: list.id } });
+    invalidateCaches();
     revalidatePath("/");
     return { ok: true };
   });

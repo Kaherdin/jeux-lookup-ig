@@ -1,12 +1,30 @@
+import { unstable_cache, revalidateTag } from "next/cache";
 import { prisma } from "./prisma";
 import { toRow } from "./game-row.mjs";
+import { categorize } from "./categories";
+
+/**
+ * Cache de données partagé entre requêtes. Les listes ne changent qu'à un ajout, un
+ * rescan ou une suppression : inutile de rejouer les requêtes Postgres à chaque
+ * affichage. Un seul jeu d'étiquettes, invalidé en bloc à la moindre écriture —
+ * à l'échelle de l'app (quelques utilisateurs, des écritures rares) c'est le bon
+ * compromis entre fraîcheur et simplicité.
+ */
+export const TAGS = { games: "games", lists: "lists" };
+export function invalidateCaches() {
+  revalidateTag(TAGS.games);
+  revalidateTag(TAGS.lists);
+}
 
 export const DEFAULT_LIST_SLUG = "decouvertes";
 
 export type GameInput = Record<string, unknown> & { titre: string };
 
 // ─── listes ────────────────────────────────────────────────────────────
-export async function getPublicLists() {
+export const getPublicLists = () =>
+  unstable_cache(publicListsQuery, ["publicLists"], { tags: [TAGS.lists, TAGS.games], revalidate: 300 })();
+
+async function publicListsQuery() {
   return prisma.list.findMany({
     where: { isPublic: true },
     orderBy: { createdAt: "asc" },
@@ -14,7 +32,10 @@ export async function getPublicLists() {
   });
 }
 
-export async function getUserLists(ownerId: string) {
+export const getUserLists = (ownerId: string) =>
+  unstable_cache(() => userListsQuery(ownerId), ["userLists", ownerId], { tags: [TAGS.lists, TAGS.games], revalidate: 300 })();
+
+async function userListsQuery(ownerId: string) {
   return prisma.list.findMany({
     where: { ownerId },
     orderBy: { createdAt: "asc" },
@@ -43,7 +64,10 @@ export function libSlugs(userId: string) {
  * Titres que l'utilisateur POSSÈDE déjà : ceux venant de ses bibliothèques PSN / Steam
  * importées. Sert à distinguer « je l'ai » de « je le veux » dans les listes.
  */
-export async function getOwnedTitles(userId: string): Promise<string[]> {
+export const getOwnedTitles = (userId: string) =>
+  unstable_cache(() => ownedTitlesQuery(userId), ["ownedTitles", userId], { tags: [TAGS.games], revalidate: 300 })();
+
+async function ownedTitlesQuery(userId: string): Promise<string[]> {
   const { psn, steam } = libSlugs(userId);
   const lists = await prisma.list.findMany({
     where: { ownerId: userId, slug: { in: [psn, steam] } },
@@ -58,7 +82,11 @@ export async function getOwnedTitles(userId: string): Promise<string[]> {
 }
 
 /** Toutes les listes visibles par quelqu'un : les publiques + les siennes. */
-export async function getVisibleLists(userId?: string | null) {
+export const getVisibleLists = (userId?: string | null) =>
+  unstable_cache(() => visibleListsQuery(userId), ["visibleLists", userId ?? "anon"],
+    { tags: [TAGS.lists, TAGS.games], revalidate: 300 })();
+
+async function visibleListsQuery(userId?: string | null) {
   return prisma.list.findMany({
     where: userId ? { OR: [{ isPublic: true }, { ownerId: userId }] } : { isPublic: true },
     orderBy: { createdAt: "asc" },
@@ -77,11 +105,46 @@ export async function createList(data: {
 }
 
 // ─── jeux ──────────────────────────────────────────────────────────────
-export async function getGames(listId: string) {
-  return prisma.game.findMany({
+/**
+ * Colonnes servies au TABLEAU. Les captures (10 URLs par jeu), la description et
+ * les champs qui ne vivent que dans la fiche restent en base : sur 500 jeux ils
+ * pesaient l'essentiel de la charge utile envoyée au navigateur à chaque affichage.
+ * La description est bien lue ici, mais pour classer le jeu — elle n'est pas renvoyée.
+ */
+const LIST_SELECT = {
+  id: true, titre: true, image: true, genre: true, univers: true, themes: true, description: true,
+  plateformes: true, trailer: true, trailerYoutube: true, sortieISO: true, sortiePrec: true,
+  dispo: true, gratuit: true, gratuitMention: true, bonPlan: true, bienNote: true, comingSoon: true,
+  prix: true, prixSteam: true, reducPct: true, note: true, noteSource: true, metacritic: true,
+  steamPct: true, steamAvis: true, joueursSteam: true, igdbVotes: true,
+  modes: true, modesDetail: true, nbJoueurs: true, nbJoueursMax: true, joueursLocalMax: true,
+  joueursOnlineMax: true, envergure: true, dureeVie: true,
+  urlSteam: true, urlPsn: true, urlStore: true, ajouteLe: true, createdAt: true,
+} as const;
+
+async function gamesQuery(listId: string) {
+  const rows = await prisma.game.findMany({
     where: { listId },
+    select: LIST_SELECT,
     orderBy: [{ bienNote: "desc" }, { note: "desc" }, { titre: "asc" }],
   });
+  // les familles sont calculées une fois ici, plus à chaque rendu chez le client
+  return rows.map(({ description, createdAt, ...g }) => ({
+    ...g,
+    cats: categorize({ genre: g.genre, themes: g.themes, univers: g.univers, description }),
+    ajouteLe: g.ajouteLe || createdAt.toISOString().slice(0, 10),
+  }));
+}
+
+export function getGames(listId: string) {
+  // 5 min de filet : les scripts (reenrich.mjs, seed) écrivent en base sans passer par
+  // l'app et ne peuvent donc pas invalider les étiquettes.
+  return unstable_cache(() => gamesQuery(listId), ["games", listId], { tags: [TAGS.games], revalidate: 300 })();
+}
+
+/** la fiche complète d'un jeu — captures, description, crédits : chargée à la demande */
+export async function getGameFull(id: string) {
+  return prisma.game.findUnique({ where: { id } });
 }
 
 export async function getTitles(listId: string) {
