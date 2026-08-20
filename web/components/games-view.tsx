@@ -12,9 +12,28 @@ import { cn, slugifyTitle } from "@/lib/utils";
 import { SelectionBar } from "@/components/selection-bar";
 import { CATEGORIES, CATEGORY_BY_KEY, categorize, type CategoryKey } from "@/lib/categories";
 
+const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
 const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
 const md = (g: Game) => g.modes ?? {};
+const TODAY = new Date().toISOString().slice(0, 10);
+/** pas encore sortie : le drapeau Steam, ou une date de sortie dans le futur */
+const aVenir = (g: Game) => !!g.comingSoon || (!!g.sortieISO && g.sortieISO > TODAY.slice(0, g.sortieISO.length));
+/** envergure : « Indé » (LLM/heuristique) vs « AA » / « AAA » */
+const estInde = (g: Game) => /ind/i.test(g.envergure ?? "");
+const estGrosStudio = (g: Game) => /^aa/i.test(g.envergure ?? "");
+/**
+ * Clé de tri par date de sortie. Une date inconnue ou seulement approximative
+ * (« Bientôt », « 2026 ») vaut une date LOINTAINE, pas une date vide : trié du plus
+ * récent au plus ancien, ce qui n'est pas encore sorti doit être en HAUT de la liste.
+ */
+const sortieVal = (g: Game) => {
+  if (g.sortieISO) return g.sortieISO;
+  const an = (g.sortiePrec ?? "").match(/\d{4}/);
+  return an ? `${an[0]}-12-31` : "9999";
+};
+/** « ~12h », « 100h+ » → 12, 100 (pour trier ; -1 quand on ne sait pas) */
+const dureeVal = (g: Game) => { const m = (g.dureeVie ?? "").match(/\d+/); return m ? +m[0] : -1; };
 const noteColor = (n: number) => (n >= 85 ? "#3fb950" : n >= 75 ? "#f5c518" : n >= 60 ? "#ff8c42" : "#f85149");
 const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
@@ -55,10 +74,11 @@ const SORT_VAL: Record<string, (g: Game) => number | string> = {
   prix: (g) => prixVal(g) ?? Infinity,
   note: (g) => noteVal(g) ?? -1,
   joueurs: (g) => g.nbJoueursMax ?? -1,
-  sortie: (g) => g.sortieISO ?? "",
+  sortie: sortieVal,
+  duree: dureeVal,
 };
-const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1 };
-const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", titre: "Titre" };
+const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1 };
+const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", titre: "Titre" };
 
 // filtres à cocher, regroupés par thème pour que le panneau reste lisible
 type FilterDef = { key: string; label: string; test: (g: Game, owned: Set<string>) => boolean };
@@ -70,6 +90,15 @@ const GROUPS: { titre: string; items: FilterDef[] }[] = [
       { key: "gratuit", label: "🆓 Gratuit", test: (g) => !!g.gratuit },
       { key: "bonPlan", label: "💸 Bon plan", test: (g) => !!g.bonPlan },
       { key: "bienNote", label: "⭐ Bien noté", test: (g) => !!g.bienNote },
+      { key: "aVenir", label: "🔜 À venir", test: aVenir },
+      { key: "sorti", label: "📅 Déjà sorti", test: (g) => !aVenir(g) },
+    ],
+  },
+  {
+    titre: "Studio",
+    items: [
+      { key: "inde", label: "🎨 Indé", test: estInde },
+      { key: "gros", label: "🏢 Gros studio (AA/AAA)", test: estGrosStudio },
     ],
   },
   {
@@ -177,7 +206,7 @@ export function GamesView({
       g,
       key: g.titre.toLowerCase(),
       hay: `${g.titre} ${g.genre ?? ""} ${g.univers ?? ""}`.toLowerCase(),
-      cats: categorize(g.genre, g.themes),
+      cats: categorize(g),
     })),
     [games]
   );
@@ -260,6 +289,10 @@ export function GamesView({
       // « je l'ai déjà » et « pas encore » s'excluent
       if (k === "possede") n.delete("manque");
       if (k === "manque") n.delete("possede");
+      if (k === "aVenir") n.delete("sorti");
+      if (k === "sorti") n.delete("aVenir");
+      if (k === "inde") n.delete("gros");
+      if (k === "gros") n.delete("inde");
       return n;
     });
   }, []);
@@ -450,7 +483,7 @@ export function GamesView({
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[900px] text-sm">
+            <table className="w-full min-w-[1060px] text-sm">
               <thead>
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="w-9 p-2.5">
@@ -463,6 +496,7 @@ export function GamesView({
                   <th className="cursor-pointer p-2.5" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</th>
                   <th className="cursor-pointer p-2.5" onClick={() => changeSort("note")}>Note{arrow("note")}</th>
                   <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</th>
+                  <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("duree")}>Durée{arrow("duree")}</th>
                   <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("sortie")}>Sortie{arrow("sortie")}</th>
                   <th className="hidden p-2.5 md:table-cell">Liens</th>
                 </tr>
@@ -515,6 +549,64 @@ function EmptyState({ titre, texte, action }: { titre: string; texte: string; ac
   );
 }
 
+/**
+ * Vignette du tableau : format 16/9 lisible, et au survol elle joue le trailer —
+ * le mp4 Steam quand on l'a (léger, démarrage immédiat), sinon la vidéo YouTube IGDB.
+ *
+ * La vidéo n'est montée qu'après 400 ms de survol : traverser le tableau à la souris
+ * ne déclenche pas 30 lecteurs. Elle est en `pointer-events-none` par-dessus l'image,
+ * donc le survol et le clic continuent d'appartenir au lien vers la fiche.
+ */
+function Thumb({ g, href }: { g: Game; href: string }) {
+  const [playing, setPlaying] = useState(false);
+  const [ready, setReady] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mp4 = https(g.trailer);
+  const yt = g.trailerYoutube;
+  const hasVideo = !!(mp4 || yt);
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  const enter = () => {
+    if (!hasVideo || playing) return;
+    timer.current = setTimeout(() => setPlaying(true), 400);
+  };
+  const leave = () => {
+    if (timer.current) clearTimeout(timer.current);
+    setPlaying(false);
+    setReady(false);
+  };
+
+  return (
+    <div onMouseEnter={enter} onMouseLeave={leave}
+      className="group relative aspect-video w-[120px] shrink-0 overflow-hidden rounded-md bg-muted sm:w-[168px]">
+      {g.image
+        ? <img src={g.image} loading="lazy" alt="" className="h-full w-full object-cover" />
+        : <div className="flex h-full w-full items-center justify-center text-2xl">🎮</div>}
+
+      {playing && (mp4 ? (
+        <video src={mp4} autoPlay muted loop playsInline onCanPlay={() => setReady(true)}
+          className={cn("pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity duration-300",
+            ready ? "opacity-100" : "opacity-0")} />
+      ) : (
+        <iframe title="" tabIndex={-1} onLoad={() => setReady(true)} allow="autoplay; encrypted-media"
+          src={`https://www.youtube.com/embed/${yt}?autoplay=1&mute=1&controls=0&modestbranding=1&playsinline=1&rel=0&loop=1&playlist=${yt}`}
+          className={cn("pointer-events-none absolute inset-0 h-full w-full transition-opacity duration-300",
+            ready ? "opacity-100" : "opacity-0")} />
+      ))}
+
+      {hasVideo && !ready && (
+        <span className="pointer-events-none absolute bottom-1 right-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">▶</span>
+      )}
+
+      {/* le lien couvre la vignette : la vidéo est en dessous et inerte, donc survol
+          et clic restent au lien, et on n'imbrique pas d'iframe dans un <a> */}
+      <Link href={href} onFocus={enter} onBlur={leave} aria-label={g.titre}
+        className="absolute inset-0 rounded-md ring-primary transition group-hover:ring-2 focus-visible:ring-2 focus-visible:outline-none" />
+    </div>
+  );
+}
+
 // mémoïsée : une frappe ou un clic de filtre ne re-rend que les lignes qui changent
 // vraiment (props toutes primitives, `onCheck` stable côté parent).
 const Row = memo(function Row({
@@ -534,8 +626,7 @@ const Row = memo(function Row({
       </td>
       <td className="p-2.5">
         <div className="flex items-center gap-3">
-          {g.image ? <img src={g.image} loading="lazy" alt="" className="h-[43px] w-[92px] shrink-0 rounded-md object-cover" />
-            : <div className="flex h-[43px] w-[92px] shrink-0 items-center justify-center rounded-md bg-muted text-lg">🎮</div>}
+          <Thumb g={g} href={`/l/${slug}/${slugifyTitle(g.titre)}`} />
           <div className="min-w-0">
             <Link href={`/l/${slug}/${slugifyTitle(g.titre)}`}
               className="block max-w-[230px] truncate text-left font-bold hover:text-primary hover:underline">{g.titre}</Link>
@@ -550,8 +641,9 @@ const Row = memo(function Row({
           {g.gratuit ? <Tag className="bg-sky-500/15 text-sky-500">🆓 Gratuit</Tag> : g.gratuitMention && <Tag className="bg-sky-500/15 text-sky-500">🆓 {g.gratuitMention}</Tag>}
           {g.bonPlan && <Tag className="bg-orange-500/15 text-orange-500">💸 Bon plan</Tag>}
           {g.bienNote && <Tag className="bg-yellow-500/15 text-yellow-500">⭐ Top</Tag>}
-          {g.comingSoon && <Tag className="bg-muted text-muted-foreground">🔜 Bientôt</Tag>}
-          {!possede && !g.dispo && !g.gratuit && !g.bonPlan && !g.bienNote && !g.comingSoon && <span className="text-muted-foreground">—</span>}
+          {aVenir(g) && <Tag className="bg-muted text-muted-foreground">🔜 À venir</Tag>}
+          {estInde(g) && <Tag className="bg-fuchsia-500/15 text-fuchsia-400">🎨 Indé</Tag>}
+          {!possede && !g.dispo && !g.gratuit && !g.bonPlan && !g.bienNote && !aVenir(g) && !g.envergure && <span className="text-muted-foreground">—</span>}
         </div>
       </td>
       <td className="p-2.5">
@@ -590,6 +682,9 @@ const Row = memo(function Row({
         )}
       </td>
       <td className="hidden p-2.5 md:table-cell">{g.nbJoueurs || <span className="text-muted-foreground">—</span>}</td>
+      <td className="hidden p-2.5 whitespace-nowrap md:table-cell">
+        {g.dureeVie ? <span title="durée de vie approximative">⏱ {g.dureeVie}</span> : <span className="text-muted-foreground">—</span>}
+      </td>
       <td className="hidden p-2.5 md:table-cell">
         {txt ? <span className={released ? "font-bold text-emerald-500" : "text-muted-foreground"}>{txt}</span> : <span className="text-muted-foreground">{g.sortiePrec || "—"}</span>}
       </td>

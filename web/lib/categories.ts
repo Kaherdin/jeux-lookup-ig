@@ -105,6 +105,19 @@ export const CATEGORY_BY_KEY: Record<string, Category> = Object.fromEntries(
   CATEGORIES.map((c) => [c.key, c])
 );
 
+/**
+ * Implications : une famille en entraîne une autre. Mieux vaut un jeu dans trop de
+ * familles que pas assez — un extraction-RPG doit ressortir sur Action, FPS, RPG ET
+ * Aventure, pas seulement sur l'étiquette exacte que le genre porte.
+ */
+const IMPLIES: Partial<Record<CategoryKey, CategoryKey[]>> = {
+  rpg: ["aventure"],
+  fps: ["action"],
+};
+// Mesuré sur la collection : 2,2 familles par jeu en moyenne, la plus large (Aventure)
+// à 50 %. Ajouter « survie ⇒ aventure » et « horreur ⇒ aventure » montait Aventure à
+// 71 % — une famille qui garde 3 jeux sur 4 ne filtre plus rien.
+
 /** minuscules + sans accent : « Réflexion » et « reflexion » doivent matcher pareil */
 function normalize(s: string) {
   return s
@@ -113,14 +126,32 @@ function normalize(s: string) {
     .toLowerCase();
 }
 
+/** ce qu'on lit pour classer un jeu — tout est optionnel */
+export type Categorisable = {
+  genre?: string | null;
+  themes?: string | null;
+  univers?: string | null;
+  description?: string | null;
+};
+
 /**
- * Range un jeu dans ses familles à partir de son genre (texte libre) et de ses thèmes.
- * Renvoie toujours au moins une clé (« autre » si rien ne matche).
+ * Range un jeu dans ses familles. On ratisse large exprès : le genre seul est souvent
+ * une étiquette unique et étroite (« Extraction »), alors qu'un même jeu est à la fois
+ * aventure, action et RPG. On lit donc le genre, les thèmes, l'univers et le début de
+ * la description, puis on applique les implications ci-dessus.
+ *
+ * Renvoie toujours au moins une clé (« autre » si vraiment rien ne matche).
  */
-export function categorize(genre?: string | null, themes?: string | null): CategoryKey[] {
-  const hay = normalize(`${genre ?? ""} ${themes ?? ""}`);
+export function categorize(input?: Categorisable | string | null): CategoryKey[] {
+  const g = typeof input === "string" ? { genre: input } : input ?? {};
+  const hay = normalize(
+    [g.genre, g.themes, g.univers, (g.description ?? "").slice(0, 400)].filter(Boolean).join(" ")
+  );
   if (!hay.trim() || hay.trim() === "?") return ["autre"];
-  const out: CategoryKey[] = [];
-  for (const c of CATEGORIES) if (c.re && c.re.test(hay)) out.push(c.key);
+  const hit = new Set<CategoryKey>();
+  for (const c of CATEGORIES) if (c.re && c.re.test(hay)) hit.add(c.key);
+  for (const k of [...hit]) for (const extra of IMPLIES[k] ?? []) hit.add(extra);
+  // ordre stable : celui de CATEGORIES, pas celui des correspondances
+  const out = CATEGORIES.filter((c) => hit.has(c.key)).map((c) => c.key);
   return out.length ? out : ["autre"];
 }
