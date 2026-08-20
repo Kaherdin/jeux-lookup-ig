@@ -397,23 +397,6 @@ export function GamesView({
         <Button asChild variant="outline"><Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> Trouver un jeu</Link></Button>
       </div>
 
-      {/* familles de jeux, toujours visibles : c'est le filtre le plus utilisé */}
-      {catList.length > 1 && (
-        <div className="flex flex-wrap gap-1.5">
-          {catList.map((cat) => {
-            const on = cats.has(cat.key);
-            return (
-              <button key={cat.key} onClick={() => toggleCat(cat.key)} title={cat.hint}
-                className={cn("rounded-full border px-3 py-1 text-[13px] font-semibold transition",
-                  on ? "border-primary bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:border-primary")}>
-                {cat.emoji} {cat.label}
-              </button>
-            );
-          })}
-          {cats.size > 0 && <Button variant="ghost" size="sm" onClick={() => setCats(new Set())}>Toutes</Button>}
-        </div>
-      )}
-
       {/* filtres actifs, retirables un par un */}
       {nbActifs > 0 && (
         <div className="flex flex-wrap items-center gap-2">
