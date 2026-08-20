@@ -129,6 +129,7 @@ export const discoverGames = openActionClient
   .inputSchema(z.object({
     platforms: z.array(z.number()).optional(),
     genres: z.array(z.number()).optional(),
+    themes: z.array(z.number()).optional(),
     modes: z.array(z.number()).optional(),
     coopLocal: z.boolean().optional(),
     playersMin: z.number().optional(),

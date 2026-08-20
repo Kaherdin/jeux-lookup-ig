@@ -951,9 +951,13 @@ export async function igdbDiscover(criteria, env, limit = 30) {
   const c = criteria || {};
   const w = ["game_type = 0", "parent_game = null", "version_parent = null"]; // jeux principaux (pas DLC/éditions)
   const ids = (a) => (Array.isArray(a) ? a.filter((x) => Number.isFinite(+x)).map(Number) : []);
-  const plats = ids(c.platforms), genres = ids(c.genres), modes = ids(c.modes);
+  const plats = ids(c.platforms), genres = ids(c.genres), modes = ids(c.modes), themes = ids(c.themes);
   if (plats.length) w.push(`platforms = (${plats.join(",")})`);
-  if (genres.length) w.push(`genres = (${genres.join(",")})`);
+  // une famille de jeux (« Horreur », « Survie ») se lit tantôt dans les genres,
+  // tantôt dans les thèmes IGDB : on accepte l'un OU l'autre.
+  if (genres.length && themes.length) w.push(`(genres = (${genres.join(",")}) | themes = (${themes.join(",")}))`);
+  else if (genres.length) w.push(`genres = (${genres.join(",")})`);
+  else if (themes.length) w.push(`themes = (${themes.join(",")})`);
   if (modes.length) w.push(`game_modes = (${modes.join(",")})`);
   if (c.coopLocal) w.push("(multiplayer_modes.splitscreen = true | game_modes = (4))");
   const pMin = +c.playersMin || 0;
