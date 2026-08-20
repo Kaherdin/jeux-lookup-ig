@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { getSession } from "@/lib/session";
-import { getGames, getUserLists, getVisibleLists, getOwnedTitles, DEFAULT_LIST_SLUG } from "@/lib/store";
+import { getGamesByLists, getUserLists, getVisibleLists, getOwnedTitles, DEFAULT_LIST_SLUG } from "@/lib/store";
 import { SiteHeader } from "./site-header";
 import { GamesView } from "./games-view";
 import { AddGamesDialog } from "./add-games-dialog";
@@ -31,21 +31,20 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
   }
 
   const sourceLists = scope === "mine" && user ? await getUserLists(user.id) : await getVisibleLists(user?.id);
-  const [parListe, ownedTitles] = await Promise.all([
-    Promise.all(sourceLists.map(async (l) => ({ slug: l.slug, games: await getGames(l.id) }))),
+  const [rows, ownedTitles] = await Promise.all([
+    getGamesByLists(sourceLists.map((l) => l.id)),
     user ? getOwnedTitles(user.id) : Promise.resolve([]),
   ]);
+  const slugParId = new Map(sourceLists.map((l) => [l.id, l.slug]));
 
   // dédoublonne par titre : un même jeu peut vivre dans plusieurs listes
   const seen = new Set<string>();
   const games: Game[] = [];
-  for (const { slug, games: rows } of parListe) {
-    for (const g of rows) {
-      const k = g.titre.toLowerCase();
-      if (seen.has(k)) continue;
-      seen.add(k);
-      games.push({ ...(g as unknown as Game), listSlug: slug });
-    }
+  for (const g of rows) {
+    const k = g.titre.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    games.push({ ...(g as unknown as Game), listSlug: slugParId.get(g.listId) });
   }
 
   const lists = sourceLists.map((l) => ({ slug: l.slug, name: l.name }));

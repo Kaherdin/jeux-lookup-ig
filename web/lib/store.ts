@@ -142,6 +142,30 @@ export function getGames(listId: string) {
   return unstable_cache(() => gamesQuery(listId), ["games", listId], { tags: [TAGS.games], revalidate: 300 })();
 }
 
+/**
+ * Les jeux de PLUSIEURS listes en une seule requête. La page d'accueil en interrogeait
+ * une par liste, en parallèle : sept requêtes concurrentes, donc sept connexions
+ * réclamées d'un coup à une base qui n'en accorde qu'une poignée.
+ */
+async function gamesMultiQuery(listIds: string[]) {
+  const rows = await prisma.game.findMany({
+    where: { listId: { in: listIds } },
+    select: { ...LIST_SELECT, listId: true },
+    orderBy: [{ bienNote: "desc" }, { note: "desc" }, { titre: "asc" }],
+  });
+  return rows.map(({ description, createdAt, ...g }) => ({
+    ...g,
+    cats: categorize({ genre: g.genre, themes: g.themes, univers: g.univers, description }),
+    ajouteLe: g.ajouteLe || createdAt.toISOString().slice(0, 10),
+  }));
+}
+
+export function getGamesByLists(listIds: string[]) {
+  const cle = [...listIds].sort().join(",");
+  return unstable_cache(() => gamesMultiQuery(listIds), ["gamesMulti", cle],
+    { tags: [TAGS.games], revalidate: 300 })();
+}
+
 /** la fiche complète d'un jeu — captures, description, crédits : chargée à la demande */
 export async function getGameFull(id: string) {
   return prisma.game.findUnique({ where: { id } });
