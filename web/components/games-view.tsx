@@ -196,8 +196,26 @@ const valeurPlage = (k: string, g: Game): number | null => {
   return d < 0 ? null : d;
 };
 
+/**
+ * Sous-tags : les étiquettes brutes du jeu (« Extraction », « Roguelite », « Dark
+ * fantasy »…) qu'on affiche SOUS la famille sélectionnée. La famille range, le
+ * sous-tag précise — sans jamais rendre au filtre principal sa longue liste illisible.
+ */
+function tokensDe(g: Game): string[] {
+  const vus = new Set<string>();
+  const out: string[] = [];
+  for (const brut of `${g.genre ?? ""},${g.themes ?? ""}`.split(/[,/·|]/)) {
+    const t = brut.replace(/\([^)]*\)/g, "").trim();
+    const k = t.toLowerCase();
+    if (t.length < 2 || t.length > 28 || vus.has(k)) continue;
+    vus.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
 /** un jeu + tout ce qui sert à le filtrer, calculé UNE fois pour toute la liste */
-type Indexed = { g: Game; key: string; hay: string; cats: CategoryKey[] };
+type Indexed = { g: Game; key: string; hay: string; cats: CategoryKey[]; toks: string[] };
 
 const splitCsv = (s: string | null) => new Set((s ?? "").split(",").filter(Boolean));
 
@@ -225,6 +243,7 @@ export function GamesView({
     if (legacy) for (const k of categorize(legacy)) if (k !== "autre") s.add(k);
     return s;
   });
+  const [sousTags, setSousTags] = useState<Set<string>>(() => splitCsv(sp.get("st")));
   const [platformFilter, setPlatformFilter] = useState(() => sp.get("p") ?? "all");
   const [active, setActive] = useState<Set<string>>(() => splitCsv(sp.get("f")));
   const [sortKey, setSortKey] = useState(() => sp.get("tri") ?? "note");
@@ -260,6 +279,7 @@ export function GamesView({
       put("q", q.trim() || null);
       put("c", [...cats].join(",") || null);
       put("g", null); // l'ancien paramètre « genre exact » n'existe plus
+      put("st", [...sousTags].join(",") || null);
       put("p", platformFilter === "all" ? null : platformFilter);
       put("f", [...active].join(",") || null);
       for (const [k, def] of Object.entries(PLAGES)) {
@@ -275,7 +295,7 @@ export function GamesView({
       if (url !== window.location.pathname + window.location.search) window.history.replaceState(null, "", url);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, cats, platformFilter, active, plages, sansInfo, sortKey, sortDir, vue]);
+  }, [q, cats, sousTags, platformFilter, active, plages, sansInfo, sortKey, sortDir, vue]);
 
   const owned = useMemo(() => new Set(ownedTitles.map((t) => t.toLowerCase())), [ownedTitles]);
   const groups = useMemo(() => GROUPS.filter((g) => g.titre !== "Ma bibliothèque" || showOwned), [showOwned]);
@@ -289,6 +309,7 @@ export function GamesView({
       key: g.titre.toLowerCase(),
       hay: `${g.titre} ${g.genre ?? ""} ${g.univers ?? ""}`.toLowerCase(),
       cats: g.cats ?? categorize(g),
+      toks: tokensDe(g),
     })),
     [games]
   );
@@ -306,12 +327,29 @@ export function GamesView({
     return CATEGORIES.filter((cat) => c.has(cat.key)).sort((a, b) => (c.get(b.key) ?? 0) - (c.get(a.key) ?? 0));
   }, [index]);
 
+  // les sous-tags n'ont de sens qu'une fois une famille choisie : ce sont ses nuances
+  const sousTagsDispo = useMemo(() => {
+    if (!cats.size) return [] as { label: string; n: number }[];
+    const c = new Map<string, { label: string; n: number }>();
+    for (const it of index) {
+      if (!it.cats.some((k) => cats.has(k))) continue;
+      for (const t of it.toks) {
+        const k = t.toLowerCase();
+        const e = c.get(k) ?? { label: t, n: 0 };
+        e.n++;
+        c.set(k, e);
+      }
+    }
+    return [...c.values()].filter((e) => e.n >= 2).sort((a, b) => b.n - a.n).slice(0, 20);
+  }, [index, cats]);
+
   // ── filtrage ────────────────────────────────────────────────────────
   // `except` permet de compter ce que donnerait CHAQUE filtre sans lui-même :
   // les compteurs affichés tiennent compte des autres critères actifs.
   const keep = useCallback((it: Indexed, except?: string) => {
     if (except !== "q" && qq && !it.hay.includes(qq)) return false;
     if (except !== "cat" && cats.size && !it.cats.some((k) => cats.has(k))) return false;
+    if (except !== "stag" && sousTags.size && !it.toks.some((t) => sousTags.has(t.toLowerCase()))) return false;
     if (except !== "plat" && platformFilter !== "all" && !(it.g.plateformes ?? []).includes(platformFilter)) return false;
     for (const k of active) {
       if (k === except) continue;
@@ -326,7 +364,7 @@ export function GamesView({
       if (v < b[0] || v > b[1]) return false;
     }
     return true;
-  }, [qq, cats, platformFilter, active, owned, plages, sansInfo]);
+  }, [qq, cats, sousTags, platformFilter, active, owned, plages, sansInfo]);
 
   const shown = useMemo(() => {
     const l = index.filter((it) => keep(it));
@@ -343,7 +381,7 @@ export function GamesView({
   }, [index, keep, sortKey, sortDir]);
 
   // on ne repart du haut que quand les critères changent (pas au tri, pas à la sélection)
-  useEffect(() => { setLimit(PAGE); }, [qq, cats, platformFilter, active, plages, sansInfo]);
+  useEffect(() => { setLimit(PAGE); }, [qq, cats, sousTags, platformFilter, active, plages, sansInfo]);
   const visible = useMemo(() => shown.slice(0, limit), [shown, limit]);
 
   // compteurs : seulement quand le panneau est ouvert — inutile de payer 11 passes sinon
@@ -395,17 +433,28 @@ export function GamesView({
       n.has(k) ? n.delete(k) : n.add(k);
       return n;
     });
+    setSousTags(new Set()); // les nuances de l'ancienne famille n'ont plus cours
+  }, []);
+
+  const toggleSousTag = useCallback((t: string) => {
+    setSousTags((prev) => {
+      const n = new Set(prev);
+      const k = t.toLowerCase();
+      n.has(k) ? n.delete(k) : n.add(k);
+      return n;
+    });
   }, []);
 
   function resetAll() {
     setQ("");
     setCats(new Set());
+    setSousTags(new Set());
     setPlatformFilter("all");
     setActive(new Set());
     setPlages(Object.fromEntries(Object.keys(PLAGES).map((k) => [k, bornesPleines(k)])));
   }
   const nbPlages = Object.keys(PLAGES).filter((k) => !estPleine(k, plages[k])).length;
-  const nbActifs = active.size + cats.size + nbPlages + (platformFilter !== "all" ? 1 : 0) + (q ? 1 : 0);
+  const nbActifs = active.size + cats.size + sousTags.size + nbPlages + (platformFilter !== "all" ? 1 : 0) + (q ? 1 : 0);
 
   const changeSort = (k: string) => {
     if (k === sortKey) setSortDir((d) => -d);
@@ -514,6 +563,9 @@ export function GamesView({
           {[...cats].map((k) => (
             <ActiveChip key={k} label={`${CATEGORY_BY_KEY[k]?.emoji ?? ""} ${CATEGORY_BY_KEY[k]?.label ?? k}`} onRemove={() => toggleCat(k)} />
           ))}
+          {[...sousTags].map((t) => (
+            <ActiveChip key={t} label={t} onRemove={() => toggleSousTag(t)} />
+          ))}
           {Object.entries(PLAGES).filter(([k]) => !estPleine(k, plages[k])).map(([k, def]) => (
             <ActiveChip key={k} label={`${def.label} ${plages[k][0]}–${plages[k][1]}${def.unite}`}
               onRemove={() => setPlages((p) => ({ ...p, [k]: bornesPleines(k) }))} />
@@ -546,6 +598,26 @@ export function GamesView({
                 );
               })}
             </div>
+            {sousTagsDispo.length > 0 && (
+              <div className="mt-2 rounded-lg border border-dashed p-2">
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Nuances de la sélection
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sousTagsDispo.map((t) => {
+                    const on = sousTags.has(t.label.toLowerCase());
+                    return (
+                      <button key={t.label} onClick={() => toggleSousTag(t.label)}
+                        className={cn("rounded-full border px-2.5 py-1 text-[12px] transition",
+                          on ? "border-primary bg-primary/15 font-semibold text-primary"
+                            : "bg-background text-muted-foreground hover:border-primary")}>
+                        {t.label} <span className="opacity-60">{t.n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           {groups.map((grp) => (
             <div key={grp.titre}>
