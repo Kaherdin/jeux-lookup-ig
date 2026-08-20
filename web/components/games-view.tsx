@@ -101,8 +101,8 @@ function modesDetailText(g: Game) {
   return out.join(" · ");
 }
 
-function Tag({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <span className={cn("inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap", className)}>{children}</span>;
+function Tag({ children, className, title }: { children: React.ReactNode; className?: string; title?: string }) {
+  return <span title={title} className={cn("inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap", className)}>{children}</span>;
 }
 
 const SORT_VAL: Record<string, (g: Game) => number | string> = {
@@ -114,9 +114,15 @@ const SORT_VAL: Record<string, (g: Game) => number | string> = {
   duree: dureeVal,
   popu: popuVal,
   ajout: (g) => g.ajouteLe ?? "",
+  // trie par famille principale, dans l'ordre de CATEGORIES (Aventure, Action, FPS…)
+  type: (g) => {
+    const k = (g.cats ?? categorize(g))[0];
+    const i = CATEGORIES.findIndex((c) => c.key === k);
+    return i < 0 ? 99 : i;
+  },
 };
-const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1, popu: -1, ajout: -1 };
-const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", popu: "Popularité", ajout: "Ajout", titre: "Titre" };
+const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1, popu: -1, ajout: -1, type: 1 };
+const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", popu: "Popularité", ajout: "Date d\u2019ajout", type: "Type", titre: "Titre" };
 
 // filtres à cocher, regroupés par thème pour que le panneau reste lisible
 type FilterDef = { key: string; label: string; test: (g: Game, owned: Set<string>) => boolean };
@@ -368,17 +374,22 @@ export function GamesView({
 
   const shown = useMemo(() => {
     const l = index.filter((it) => keep(it));
-    const val = SORT_VAL[sortKey] ?? SORT_VAL.note;
+    const base = SORT_VAL[sortKey] ?? SORT_VAL.note;
+    // « Type » trie par famille ; mais dès qu'une famille est cochée, la famille ne
+    // distingue plus rien — on trie alors par SOUS-type, l'étiquette d'origine du jeu.
+    const val = sortKey === "type" && cats.size
+      ? (it: Indexed) => (it.toks[0] ?? "").toLowerCase()
+      : (it: Indexed) => base(it.g);
     l.sort((a, b) => {
       // ce qu'on vient d'ajouter reste en tête quel que soit le tri, pendant 7 jours
       const ra = estRecent(a.g) ? 1 : 0, rb = estRecent(b.g) ? 1 : 0;
       if (ra !== rb) return rb - ra;
-      const va = val(a.g), vb = val(b.g);
+      const va = val(a), vb = val(b);
       const r = va < vb ? -1 : va > vb ? 1 : 0;
       return r * sortDir || a.g.titre.localeCompare(b.g.titre);
     });
     return l;
-  }, [index, keep, sortKey, sortDir]);
+  }, [index, keep, sortKey, sortDir, cats]);
 
   // on ne repart du haut que quand les critères changent (pas au tri, pas à la sélection)
   useEffect(() => { setLimit(PAGE); }, [qq, cats, sousTags, platformFilter, active, plages, sansInfo]);
@@ -484,6 +495,22 @@ export function GamesView({
   }
   const selectedGames = useMemo(() => games.filter((g) => selected.has(g.id)), [games, selected]);
 
+  /**
+   * Les critères du panneau, traduits pour la recherche IGDB : mêmes familles, même
+   * console, mêmes modes, même note et même nombre de joueurs. On ne demande pas deux
+   * fois la même chose à l'utilisateur selon l'onglet où il se trouve.
+   */
+  const criteres = useMemo(() => ({
+    familles: [...cats],
+    plateforme: platformFilter,
+    solo: active.has("solo"),
+    coop: active.has("coop"),
+    pvp: active.has("pvp"),
+    canape: active.has("canape"),
+    noteMin: estPleine("note", plages.note) ? 0 : plages.note[0],
+    joueursMin: Math.max(estPleine("joueurs", plages.joueurs) ? 0 : plages.joueurs[0], active.has("j4") ? 4 : 0),
+  }), [cats, platformFilter, active, plages]);
+
   const onglets: [typeof vue, string][] = [
     ["collection", `Ma collection (${games.length})`],
     ["decouvrir", "Découvrir de nouveaux jeux"],
@@ -502,9 +529,156 @@ export function GamesView({
         ))}
       </div>
 
+      {/* barre de commande : la recherche vit dans le panneau quand il est ouvert,
+          pour n'avoir qu'un seul endroit où poser ses critères */}
+      <div className="flex flex-wrap items-center gap-2.5">
+        {!panel && (
+          <div className="relative min-w-[220px] flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input placeholder="Rechercher un titre, un genre, un univers…" value={q}
+              onChange={(e) => setQ(e.target.value)} className="pl-9" />
+          </div>
+        )}
+        <Button variant={panel || nbActifs ? "default" : "outline"} onClick={() => setPanel((v) => !v)}
+          className={panel ? "flex-1 justify-start sm:flex-none sm:justify-center" : ""}>
+          <SlidersHorizontal className="mr-1 h-4 w-4" /> Filtres{nbActifs ? ` (${nbActifs})` : ""}
+        </Button>
+        {vue === "collection" && (
+          <>
+            <Select value={sortKey} onValueChange={(v) => { setSortKey(v); setSortDir(SORT_DEFDIR[v] ?? -1); }}>
+              <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Object.entries(SORT_LABEL).map(([k, l]) => <SelectItem key={k} value={k}>Tri : {l}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="icon" title="Inverser le sens"
+              onClick={() => setSortDir((d) => -d)}>{sortDir === 1 ? "▲" : "▼"}</Button>
+          </>
+        )}
+      </div>
+
+      {/* filtres actifs, retirables un par un */}
+      {nbActifs > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {q && <ActiveChip label={`« ${q} »`} onRemove={() => setQ("")} />}
+          {[...cats].map((k) => (
+            <ActiveChip key={k} label={`${CATEGORY_BY_KEY[k]?.emoji ?? ""} ${CATEGORY_BY_KEY[k]?.label ?? k}`} onRemove={() => toggleCat(k)} />
+          ))}
+          {[...sousTags].map((t) => (
+            <ActiveChip key={t} label={t} onRemove={() => toggleSousTag(t)} />
+          ))}
+          {Object.entries(PLAGES).filter(([k]) => !estPleine(k, plages[k])).map(([k, def]) => (
+            <ActiveChip key={k} label={`${def.label} ${plages[k][0]}–${plages[k][1]}${def.unite}`}
+              onRemove={() => setPlages((p) => ({ ...p, [k]: bornesPleines(k) }))} />
+          ))}
+          {platformFilter !== "all" && <ActiveChip label={`Console : ${platformFilter}`} onRemove={() => setPlatformFilter("all")} />}
+          {[...active].map((k) => (
+            <ActiveChip key={k} label={findFilter(k)?.label ?? k} onRemove={() => toggleFilter(k)} />
+          ))}
+          <Button variant="ghost" size="sm" onClick={resetAll}>Tout effacer</Button>
+        </div>
+      )}
+
+      {/* ── panneau : un seul endroit pour chercher et affiner ─────────── */}
+      {panel && (
+        <div className="space-y-5 rounded-2xl border bg-card p-4 shadow-sm sm:p-5">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+            <Input autoFocus placeholder="Rechercher un titre, un genre, un univers…" value={q}
+              onChange={(e) => setQ(e.target.value)} className="h-12 pl-11 pr-10 text-base" />
+            {q && (
+              <button onClick={() => setQ("")} aria-label="Effacer la recherche"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+
+          <Bloc titre="Type de jeu">
+            <div className="flex flex-wrap gap-2">
+              {catList.map((cat) => {
+                const on = cats.has(cat.key);
+                const n = counts["cat:" + cat.key] ?? 0;
+                return (
+                  <Puce key={cat.key} on={on} n={n} titre={cat.hint} onClick={() => toggleCat(cat.key)}>
+                    {cat.emoji} {cat.label}
+                  </Puce>
+                );
+              })}
+            </div>
+            {sousTagsDispo.length > 0 && (
+              <div className="mt-2.5 rounded-lg bg-muted/40 p-2.5">
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Nuances de la sélection
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sousTagsDispo.map((t) => {
+                    const on = sousTags.has(t.label.toLowerCase());
+                    return (
+                      <button key={t.label} onClick={() => toggleSousTag(t.label)}
+                        className={cn("rounded-full border px-2.5 py-1 text-[12px] transition",
+                          on ? "border-primary bg-primary/15 font-semibold text-primary"
+                            : "border-transparent bg-background text-muted-foreground hover:border-primary")}>
+                        {t.label} <span className="opacity-60">{t.n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </Bloc>
+
+          <div className="grid gap-5 md:grid-cols-2">
+            {groups.map((grp) => (
+              <Bloc key={grp.titre} titre={grp.titre}>
+                <div className="flex flex-wrap gap-2">
+                  {grp.items.map((f) => {
+                    const on = active.has(f.key);
+                    const n = counts[f.key] ?? 0;
+                    return (
+                      <Puce key={f.key} on={on} n={n} onClick={() => toggleFilter(f.key)}>{f.label}</Puce>
+                    );
+                  })}
+                </div>
+              </Bloc>
+            ))}
+            <Bloc titre="Console">
+              <Select value={platformFilter} onValueChange={setPlatformFilter}>
+                <SelectTrigger className="w-[220px]"><SelectValue placeholder="Console" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Toutes les consoles</SelectItem>
+                  {platforms.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Bloc>
+          </div>
+
+          <Bloc titre="Fourchettes"
+            aide="Un jeu dont l'info manque reste affiché — mieux vaut un résultat en trop qu'un jeu écarté par une donnée absente.">
+            <div className="flex flex-wrap items-end gap-4">
+              {Object.entries(PLAGES).map(([k, def]) => (
+                <Fourchette key={k} k={k} def={def} bornes={plages[k]}
+                  onChange={(b) => setPlages((p) => ({ ...p, [k]: b }))} />
+              ))}
+              <label className="flex cursor-pointer items-center gap-2 pb-1.5 text-xs text-muted-foreground">
+                <Checkbox checked={sansInfo} onCheckedChange={(c) => setSansInfo(!!c)} />
+                Garder les jeux dont l&apos;info manque
+              </label>
+            </div>
+          </Bloc>
+
+          <div className="flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
+            <span className="font-semibold">
+              {vue === "collection" ? `${shown.length} jeu${shown.length > 1 ? "x" : ""} sur ${games.length}` : "Critères appliqués à la recherche IGDB"}
+            </span>
+            <Button variant="ghost" size="sm" onClick={resetAll} disabled={!nbActifs}>Tout effacer</Button>
+            <Button variant="outline" size="sm" className="ml-auto" onClick={() => setPanel(false)}>Fermer</Button>
+          </div>
+        </div>
+      )}
+
       {vue === "decouvrir" ? (
-        <DiscoverView lists={lists} embedded famillesInitiales={[...cats]}
-          noteMinInitiale={estPleine("note", plages.note) ? undefined : plages.note[0]} />
+        <DiscoverView lists={lists} criteres={criteres} />
       ) : (
       <>
       {/* stats */}
@@ -536,138 +710,6 @@ export function GamesView({
         </div>
       )}
 
-      {/* barre principale : recherche + filtres + tri */}
-      <div className="flex flex-wrap items-center gap-2.5">
-        <Input placeholder="Rechercher un titre, un genre, un univers…" value={q}
-          onChange={(e) => setQ(e.target.value)} className="min-w-[220px] flex-1" />
-        <Button variant={panel || nbActifs ? "default" : "outline"} onClick={() => setPanel((v) => !v)}>
-          <SlidersHorizontal className="mr-1 h-4 w-4" /> Filtres{nbActifs ? ` (${nbActifs})` : ""}
-        </Button>
-        <Select value={sortKey} onValueChange={(v) => { setSortKey(v); setSortDir(SORT_DEFDIR[v] ?? -1); }}>
-          <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {Object.entries(SORT_LABEL).map(([k, l]) => <SelectItem key={k} value={k}>Tri : {l}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Button variant="outline" size="icon" title="Inverser le sens"
-          onClick={() => setSortDir((d) => -d)}>{sortDir === 1 ? "▲" : "▼"}</Button>
-        <Button variant="outline" onClick={() => setVue("decouvrir")}>
-          <Search className="mr-1 h-4 w-4" /> Trouver un jeu
-        </Button>
-      </div>
-
-      {/* filtres actifs, retirables un par un */}
-      {nbActifs > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          {q && <ActiveChip label={`« ${q} »`} onRemove={() => setQ("")} />}
-          {[...cats].map((k) => (
-            <ActiveChip key={k} label={`${CATEGORY_BY_KEY[k]?.emoji ?? ""} ${CATEGORY_BY_KEY[k]?.label ?? k}`} onRemove={() => toggleCat(k)} />
-          ))}
-          {[...sousTags].map((t) => (
-            <ActiveChip key={t} label={t} onRemove={() => toggleSousTag(t)} />
-          ))}
-          {Object.entries(PLAGES).filter(([k]) => !estPleine(k, plages[k])).map(([k, def]) => (
-            <ActiveChip key={k} label={`${def.label} ${plages[k][0]}–${plages[k][1]}${def.unite}`}
-              onRemove={() => setPlages((p) => ({ ...p, [k]: bornesPleines(k) }))} />
-          ))}
-          {platformFilter !== "all" && <ActiveChip label={`Console : ${platformFilter}`} onRemove={() => setPlatformFilter("all")} />}
-          {[...active].map((k) => (
-            <ActiveChip key={k} label={findFilter(k)?.label ?? k} onRemove={() => toggleFilter(k)} />
-          ))}
-          <Button variant="ghost" size="sm" onClick={resetAll}>Tout effacer</Button>
-        </div>
-      )}
-
-      {/* panneau de filtres */}
-      {panel && (
-        <div className="space-y-4 rounded-xl border bg-card p-4">
-          <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type de jeu</div>
-            <div className="flex flex-wrap gap-2">
-              {catList.map((cat) => {
-                const on = cats.has(cat.key);
-                const n = counts["cat:" + cat.key] ?? 0;
-                return (
-                  <button key={cat.key} onClick={() => toggleCat(cat.key)} disabled={!on && n === 0} title={cat.hint}
-                    className={cn("rounded-full border px-3 py-1.5 text-[13px] font-semibold transition",
-                      on ? "border-primary bg-primary text-primary-foreground"
-                        : n === 0 ? "cursor-not-allowed border-dashed text-muted-foreground/40"
-                          : "bg-background text-muted-foreground hover:border-primary")}>
-                    {cat.emoji} {cat.label} <span className={cn("ml-0.5 font-normal", on ? "opacity-80" : "opacity-60")}>{n}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {sousTagsDispo.length > 0 && (
-              <div className="mt-2 rounded-lg border border-dashed p-2">
-                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Nuances de la sélection
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {sousTagsDispo.map((t) => {
-                    const on = sousTags.has(t.label.toLowerCase());
-                    return (
-                      <button key={t.label} onClick={() => toggleSousTag(t.label)}
-                        className={cn("rounded-full border px-2.5 py-1 text-[12px] transition",
-                          on ? "border-primary bg-primary/15 font-semibold text-primary"
-                            : "bg-background text-muted-foreground hover:border-primary")}>
-                        {t.label} <span className="opacity-60">{t.n}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-          {groups.map((grp) => (
-            <div key={grp.titre}>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{grp.titre}</div>
-              <div className="flex flex-wrap gap-2">
-                {grp.items.map((f) => {
-                  const on = active.has(f.key);
-                  const n = counts[f.key] ?? 0;
-                  return (
-                    <button key={f.key} onClick={() => toggleFilter(f.key)} disabled={!on && n === 0}
-                      className={cn("rounded-full border px-3 py-1.5 text-[13px] font-semibold transition",
-                        on ? "border-primary bg-primary text-primary-foreground"
-                          : n === 0 ? "cursor-not-allowed border-dashed text-muted-foreground/40"
-                            : "bg-background text-muted-foreground hover:border-primary")}>
-                      {f.label} <span className={cn("ml-0.5 font-normal", on ? "opacity-80" : "opacity-60")}>{n}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-          <div className="border-t pt-3">
-            <div className="mb-2 flex flex-wrap items-center gap-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Fourchettes</div>
-              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                <Checkbox checked={sansInfo} onCheckedChange={(c) => setSansInfo(!!c)} />
-                Garder les jeux dont l&apos;info manque
-              </label>
-            </div>
-            <div className="flex flex-wrap gap-4">
-              {Object.entries(PLAGES).map(([k, def]) => (
-                <Fourchette key={k} k={k} def={def} bornes={plages[k]}
-                  onChange={(b) => setPlages((p) => ({ ...p, [k]: b }))} />
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2.5 border-t pt-3">
-            <Select value={platformFilter} onValueChange={setPlatformFilter}>
-              <SelectTrigger className="w-[190px]"><SelectValue placeholder="Console" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Toutes les consoles</SelectItem>
-                {platforms.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Button variant="ghost" onClick={() => setPanel(false)} className="ml-auto">Fermer</Button>
-          </div>
-        </div>
-      )}
-
       <div className="text-sm text-muted-foreground">
         {shown.length} jeu{shown.length > 1 ? "x" : ""} affiché{shown.length > 1 ? "s" : ""}
         {shown.length !== games.length ? ` sur ${games.length}` : ""}
@@ -682,16 +724,14 @@ export function GamesView({
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[1120px] text-sm">
+            <table className="w-full min-w-[1040px] text-sm">
               <thead>
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="w-9 p-2.5">
                     <Checkbox checked={allShownSelected} onCheckedChange={toggleSelectAll} aria-label="Tout sélectionner" />
                   </th>
                   <th className="cursor-pointer p-2.5 whitespace-nowrap" onClick={() => changeSort("titre")}>Jeu{arrow("titre")}</th>
-                  <th className="p-2.5">Statut</th>
-                  <th className="p-2.5">Modes</th>
-                  <th className="hidden p-2.5 md:table-cell">Plateformes</th>
+                  <th className="cursor-pointer p-2.5" onClick={() => changeSort("type")}>Type{arrow("type")}</th>
                   <th className="cursor-pointer p-2.5" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</th>
                   <th className="cursor-pointer p-2.5" onClick={() => changeSort("note")}>Note{arrow("note")}</th>
                   <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</th>
@@ -741,6 +781,34 @@ export function GamesView({
       <SelectionBar games={selectedGames} lists={lists} currentSlug={list.slug}
         onClear={() => setSelected(new Set())} canManage={canManage} />
     </div>
+  );
+}
+
+/** une section du panneau : titre discret, contenu, et une aide facultative */
+function Bloc({ titre, aide, children }: { titre: string; aide?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-baseline gap-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{titre}</div>
+        {aide && <div className="text-[11px] text-muted-foreground/70">{aide}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** puce de filtre : allumée, éteinte, ou désactivée quand elle ne laisserait rien passer */
+function Puce({
+  on, n, titre, onClick, children,
+}: { on: boolean; n: number; titre?: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} disabled={!on && n === 0} title={titre}
+      className={cn("rounded-full border px-3 py-1.5 text-[13px] font-semibold transition",
+        on ? "border-primary bg-primary text-primary-foreground shadow-sm"
+          : n === 0 ? "cursor-not-allowed border-dashed text-muted-foreground/40"
+            : "bg-background text-muted-foreground hover:border-primary hover:text-foreground")}>
+      {children} <span className={cn("ml-0.5 font-normal tabular-nums", on ? "opacity-80" : "opacity-60")}>{n}</span>
+    </button>
   );
 }
 
@@ -881,21 +949,47 @@ const Row = memo(function Row({
   const dev = g.prix?.devise ?? "CHF";
   const store = g.prix?.store ?? "Steam";
   const detail = modesDetailText(g);
+  const familles = (g.cats ?? categorize(g)).map((k) => CATEGORY_BY_KEY[k]).filter(Boolean);
   const { txt, released } = fmtDate(g.sortieISO);
   return (
     <tr className={cn("border-b hover:bg-muted/40", checked && "bg-primary/5")}>
       <td className="p-2.5 align-top">
         <Checkbox checked={checked} onCheckedChange={(c) => onCheck(g.id, !!c)} aria-label={`Sélectionner ${g.titre}`} />
       </td>
-      <td className="min-w-[320px] p-2.5">
-        <div className="flex items-center gap-3">
+      <td className="min-w-[340px] p-2.5">
+        <div className="flex items-start gap-3">
           <Thumb g={g} href={`/l/${slug}/${slugifyTitle(g.titre)}`} onOpen={() => onOpen(g)} />
-          <div className="min-w-0 flex-1">
-            <Link href={`/l/${slug}/${slugifyTitle(g.titre)}`}
-              onClick={(e) => { if (clicSimple(e)) { e.preventDefault(); onOpen(g); } }}
-              className="block truncate text-left text-[15px] font-bold hover:text-primary hover:underline">{g.titre}</Link>
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="flex items-baseline gap-2">
+              <Link href={`/l/${slug}/${slugifyTitle(g.titre)}`}
+                onClick={(e) => { if (clicSimple(e)) { e.preventDefault(); onOpen(g); } }}
+                className="min-w-0 truncate text-left text-[15px] font-bold hover:text-primary hover:underline">{g.titre}</Link>
+              {/* statut : des pastilles expliquées au survol, plutôt qu'une colonne entière */}
+              <span className="flex shrink-0 items-center gap-1 text-[13px]">
+                {possede && <span title="déjà dans ma bibliothèque">✔</span>}
+                {g.dispo && <span title="disponible">✅</span>}
+                {(g.gratuit || g.gratuitMention) && <span title={g.gratuit ? "gratuit" : `gratuit — ${g.gratuitMention}`}>🆓</span>}
+                {g.bonPlan && <span title="bon plan">💸</span>}
+                {g.bienNote && <span title="bien noté">⭐</span>}
+                {aVenir(g) && <span title="pas encore sorti">🔜</span>}
+                {estInde(g) && <span title="studio indé">🎨</span>}
+                {estRecent(g) && <span title="ajouté cette semaine">🆕</span>}
+              </span>
+            </div>
             <div className="truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
-            <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-1">
+              {m.solo && <Tag className="bg-violet-500/15 text-violet-400">🎯 Solo</Tag>}
+              {m.coop && <Tag className="bg-teal-500/15 text-teal-400">👥 Coop</Tag>}
+              {m.pvp && <Tag className="bg-pink-500/15 text-pink-400">⚔️ PvP</Tag>}
+              {!m.solo && !m.coop && !m.pvp && m.multi && <Tag className="bg-muted text-muted-foreground">🌐 Multi</Tag>}
+              {!!g.plateformes.length && (
+                <span className="truncate text-[11px] text-muted-foreground" title={g.plateformes.join(" · ")}>
+                  {g.plateformes.slice(0, 4).join(" · ")}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+              {detail && <span>{detail}</span>}
               {g.dureeVie && <span title="durée de vie approximative">⏱ {g.dureeVie}</span>}
               {g.ajouteLe && <span title={`ajouté le ${g.ajouteLe}`}>+ {fmtJour(g.ajouteLe)}</span>}
               {g.urlSteam && <a href={g.urlSteam} target="_blank" rel="noopener noreferrer"
@@ -908,33 +1002,11 @@ const Row = memo(function Row({
           </div>
         </div>
       </td>
-      <td className="p-2.5">
+      <td className="p-2.5 align-top">
         <div className="flex flex-wrap gap-1">
-          {possede && <Tag className="bg-primary/15 text-primary"><Check className="mr-0.5 h-3 w-3" /> J&apos;ai</Tag>}
-          {g.dispo && <Tag className="bg-emerald-500/15 text-emerald-500">✅ Dispo</Tag>}
-          {g.gratuit ? <Tag className="bg-sky-500/15 text-sky-500">🆓 Gratuit</Tag> : g.gratuitMention && <Tag className="bg-sky-500/15 text-sky-500">🆓 {g.gratuitMention}</Tag>}
-          {g.bonPlan && <Tag className="bg-orange-500/15 text-orange-500">💸 Bon plan</Tag>}
-          {g.bienNote && <Tag className="bg-yellow-500/15 text-yellow-500">⭐ Top</Tag>}
-          {aVenir(g) && <Tag className="bg-muted text-muted-foreground">🔜 À venir</Tag>}
-          {estInde(g) && <Tag className="bg-fuchsia-500/15 text-fuchsia-400">🎨 Indé</Tag>}
-          {estRecent(g) && <Tag className="bg-primary/15 text-primary">🆕 Ajout récent</Tag>}
-          {!possede && !g.dispo && !g.gratuit && !g.bonPlan && !g.bienNote && !aVenir(g) && !g.envergure && <span className="text-muted-foreground">—</span>}
-        </div>
-      </td>
-      <td className="p-2.5">
-        <div className="flex flex-wrap gap-1">
-          {m.solo && <Tag className="bg-violet-500/15 text-violet-400">🎯 Solo</Tag>}
-          {m.coop && <Tag className="bg-teal-500/15 text-teal-400">👥 Coop</Tag>}
-          {m.pvp && <Tag className="bg-pink-500/15 text-pink-400">⚔️ PvP</Tag>}
-          {!m.solo && !m.coop && !m.pvp && m.multi && <Tag className="bg-muted text-muted-foreground">🌐 Multi</Tag>}
-          {!m.solo && !m.coop && !m.pvp && !m.multi && <span className="text-muted-foreground">—</span>}
-        </div>
-        {detail && <div className="mt-0.5 text-[11px] text-muted-foreground">{detail}</div>}
-      </td>
-      <td className="hidden p-2.5 md:table-cell">
-        <div className="flex flex-wrap gap-1">
-          {g.plateformes.length ? g.plateformes.slice(0, 5).map((pl, i) => <Tag key={i} className="bg-muted text-foreground">{pl}</Tag>)
-            : <span className="text-muted-foreground">—</span>}
+          {familles.length ? familles.map((c) => (
+            <Tag key={c.key} className="bg-muted text-foreground" title={c.hint}>{c.emoji} {c.label}</Tag>
+          )) : <span className="text-muted-foreground">—</span>}
         </div>
       </td>
       <td className="p-2.5 whitespace-nowrap">
