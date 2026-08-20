@@ -22,6 +22,11 @@ const GameDetail = dynamic(() => import("@/components/game-detail").then((m) => 
   loading: () => <div className="py-16 text-center text-sm text-muted-foreground">Chargement…</div>,
 });
 
+// même traitement que la fiche : l'onglet Découvrir n'est chargé qu'au moment où on l'ouvre
+const DiscoverView = dynamic(() => import("@/components/discover-view").then((m) => m.DiscoverView), {
+  loading: () => <div className="py-16 text-center text-sm text-muted-foreground">Chargement…</div>,
+});
+
 /** clic « normal » : sans modificateur ni clic du milieu — sinon on laisse le lien faire */
 const clicSimple = (e: React.MouseEvent) => !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
 
@@ -238,6 +243,7 @@ export function GamesView({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [limit, setLimit] = useState(PAGE);
   const [fiche, setFiche] = useState<Game | null>(null);
+  const [vue, setVue] = useState<"collection" | "decouvrir">(() => (sp.get("vue") === "decouvrir" ? "decouvrir" : "collection"));
 
   // la frappe reste fluide : le filtrage utilise une valeur « en retard » que React
   // recalcule en tâche de fond pendant que l'input, lui, répond au clavier.
@@ -261,6 +267,7 @@ export function GamesView({
         put(def.param, estPleine(k, b) ? null : `${b[0]}-${b[1]}`);
       }
       put("si", sansInfo ? null : "0");
+      put("vue", vue === "decouvrir" ? "decouvrir" : null);
       put("tri", sortKey === "note" ? null : sortKey);
       put("sens", sortDir === (SORT_DEFDIR[sortKey] ?? -1) ? null : sortDir === 1 ? "asc" : "desc");
       const qs = p.toString();
@@ -268,7 +275,7 @@ export function GamesView({
       if (url !== window.location.pathname + window.location.search) window.history.replaceState(null, "", url);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, cats, platformFilter, active, plages, sansInfo, sortKey, sortDir]);
+  }, [q, cats, platformFilter, active, plages, sansInfo, sortKey, sortDir, vue]);
 
   const owned = useMemo(() => new Set(ownedTitles.map((t) => t.toLowerCase())), [ownedTitles]);
   const groups = useMemo(() => GROUPS.filter((g) => g.titre !== "Ma bibliothèque" || showOwned), [showOwned]);
@@ -428,8 +435,29 @@ export function GamesView({
   }
   const selectedGames = useMemo(() => games.filter((g) => selected.has(g.id)), [games, selected]);
 
+  const onglets: [typeof vue, string][] = [
+    ["collection", `Ma collection (${games.length})`],
+    ["decouvrir", "Découvrir de nouveaux jeux"],
+  ];
+
   return (
     <div className="space-y-5">
+      {/* deux façons de chercher, un seul endroit : dans mes listes, ou dans tout IGDB */}
+      <div className="flex gap-1 border-b">
+        {onglets.map(([k, l]) => (
+          <button key={k} onClick={() => setVue(k)}
+            className={cn("-mb-px border-b-2 px-3 py-2 text-sm font-semibold transition",
+              vue === k ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {vue === "decouvrir" ? (
+        <DiscoverView lists={lists} embedded famillesInitiales={[...cats]}
+          noteMinInitiale={estPleine("note", plages.note) ? undefined : plages.note[0]} />
+      ) : (
+      <>
       {/* stats */}
       <div className="flex flex-wrap gap-2.5">
         {stats.map(([l, v]) => (
@@ -474,7 +502,9 @@ export function GamesView({
         </Select>
         <Button variant="outline" size="icon" title="Inverser le sens"
           onClick={() => setSortDir((d) => -d)}>{sortDir === 1 ? "▲" : "▼"}</Button>
-        <Button asChild variant="outline"><Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> Trouver un jeu</Link></Button>
+        <Button variant="outline" onClick={() => setVue("decouvrir")}>
+          <Search className="mr-1 h-4 w-4" /> Trouver un jeu
+        </Button>
       </div>
 
       {/* filtres actifs, retirables un par un */}
@@ -614,6 +644,9 @@ export function GamesView({
             </div>
           )}
         </>
+      )}
+
+      </>
       )}
 
       {/* clic sur un jeu = grande modale ; ⌘/ctrl-clic ou clic du milieu ouvrent
