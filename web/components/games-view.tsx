@@ -149,6 +149,36 @@ const GROUPS: { titre: string; items: FilterDef[] }[] = [
 const ALL_FILTERS = GROUPS.flatMap((g) => g.items);
 const findFilter = (k: string) => ALL_FILTERS.find((f) => f.key === k);
 
+/**
+ * Filtres chiffrés : note, durée de vie, nombre de joueurs.
+ * Chaque critère est une fourchette [min, max] ; aux bornes extrêmes il est inactif.
+ * Un jeu dont l'info manque est GARDÉ par défaut — mieux vaut un résultat en trop
+ * qu'un jeu écarté parce qu'on ne connaît pas sa durée de vie.
+ */
+type Bornes = [number, number];
+const PLAGES: Record<string, { label: string; unite: string; opts: number[]; param: string }> = {
+  note: { label: "Note", unite: "", opts: [0, 50, 60, 70, 80, 90, 100], param: "n" },
+  duree: { label: "Durée de vie", unite: "h", opts: [0, 5, 10, 20, 40, 60, 100], param: "d" },
+  joueurs: { label: "Joueurs", unite: "", opts: [1, 2, 3, 4, 6, 8], param: "j" },
+};
+const bornesPleines = (k: string): Bornes => {
+  const o = PLAGES[k].opts;
+  return [o[0], o[o.length - 1]];
+};
+const estPleine = (k: string, b: Bornes) => { const p = bornesPleines(k); return b[0] <= p[0] && b[1] >= p[1]; };
+const litBornes = (k: string, v: string | null): Bornes => {
+  const p = bornesPleines(k);
+  const m = (v ?? "").match(/^(\d+)-(\d+)$/);
+  return m ? [Math.max(+m[1], p[0]), Math.min(+m[2], p[1])] : p;
+};
+/** valeur du jeu pour un critère chiffré — null quand l'info manque */
+const valeurPlage = (k: string, g: Game): number | null => {
+  if (k === "note") return noteVal(g);
+  if (k === "joueurs") return g.nbJoueursMax ?? null;
+  const d = dureeVal(g);
+  return d < 0 ? null : d;
+};
+
 /** un jeu + tout ce qui sert à le filtrer, calculé UNE fois pour toute la liste */
 type Indexed = { g: Game; key: string; hay: string; cats: CategoryKey[] };
 
@@ -186,6 +216,12 @@ export function GamesView({
     return s ? (s === "asc" ? 1 : -1) : SORT_DEFDIR[sp.get("tri") ?? "note"] ?? -1;
   });
 
+  const [plages, setPlages] = useState<Record<string, Bornes>>(() =>
+    Object.fromEntries(Object.entries(PLAGES).map(([k, def]) => [k, litBornes(k, sp.get(def.param))]))
+  );
+  // un jeu sans note / sans durée connue reste visible, sauf si on décoche
+  const [sansInfo, setSansInfo] = useState(() => sp.get("si") !== "0");
+
   const [panel, setPanel] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [limit, setLimit] = useState(PAGE);
@@ -208,6 +244,11 @@ export function GamesView({
       put("g", null); // l'ancien paramètre « genre exact » n'existe plus
       put("p", platformFilter === "all" ? null : platformFilter);
       put("f", [...active].join(",") || null);
+      for (const [k, def] of Object.entries(PLAGES)) {
+        const b = plages[k];
+        put(def.param, estPleine(k, b) ? null : `${b[0]}-${b[1]}`);
+      }
+      put("si", sansInfo ? null : "0");
       put("tri", sortKey === "note" ? null : sortKey);
       put("sens", sortDir === (SORT_DEFDIR[sortKey] ?? -1) ? null : sortDir === 1 ? "asc" : "desc");
       const qs = p.toString();
@@ -215,7 +256,7 @@ export function GamesView({
       if (url !== window.location.pathname + window.location.search) window.history.replaceState(null, "", url);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, cats, platformFilter, active, sortKey, sortDir]);
+  }, [q, cats, platformFilter, active, plages, sansInfo, sortKey, sortDir]);
 
   const owned = useMemo(() => new Set(ownedTitles.map((t) => t.toLowerCase())), [ownedTitles]);
   const groups = useMemo(() => GROUPS.filter((g) => g.titre !== "Ma bibliothèque" || showOwned), [showOwned]);
@@ -258,8 +299,15 @@ export function GamesView({
       const f = findFilter(k);
       if (f && !f.test(it.g, owned)) return false;
     }
+    for (const k of Object.keys(PLAGES)) {
+      const b = plages[k];
+      if (estPleine(k, b)) continue;
+      const v = valeurPlage(k, it.g);
+      if (v == null) { if (!sansInfo) return false; continue; }
+      if (v < b[0] || v > b[1]) return false;
+    }
     return true;
-  }, [qq, cats, platformFilter, active, owned]);
+  }, [qq, cats, platformFilter, active, owned, plages, sansInfo]);
 
   const shown = useMemo(() => {
     const l = index.filter((it) => keep(it));
@@ -273,7 +321,7 @@ export function GamesView({
   }, [index, keep, sortKey, sortDir]);
 
   // on ne repart du haut que quand les critères changent (pas au tri, pas à la sélection)
-  useEffect(() => { setLimit(PAGE); }, [qq, cats, platformFilter, active]);
+  useEffect(() => { setLimit(PAGE); }, [qq, cats, platformFilter, active, plages, sansInfo]);
   const visible = useMemo(() => shown.slice(0, limit), [shown, limit]);
 
   // compteurs : seulement quand le panneau est ouvert — inutile de payer 11 passes sinon
@@ -332,8 +380,10 @@ export function GamesView({
     setCats(new Set());
     setPlatformFilter("all");
     setActive(new Set());
+    setPlages(Object.fromEntries(Object.keys(PLAGES).map((k) => [k, bornesPleines(k)])));
   }
-  const nbActifs = active.size + cats.size + (platformFilter !== "all" ? 1 : 0) + (q ? 1 : 0);
+  const nbPlages = Object.keys(PLAGES).filter((k) => !estPleine(k, plages[k])).length;
+  const nbActifs = active.size + cats.size + nbPlages + (platformFilter !== "all" ? 1 : 0) + (q ? 1 : 0);
 
   const changeSort = (k: string) => {
     if (k === sortKey) setSortDir((d) => -d);
@@ -414,6 +464,10 @@ export function GamesView({
           {[...cats].map((k) => (
             <ActiveChip key={k} label={`${CATEGORY_BY_KEY[k]?.emoji ?? ""} ${CATEGORY_BY_KEY[k]?.label ?? k}`} onRemove={() => toggleCat(k)} />
           ))}
+          {Object.entries(PLAGES).filter(([k]) => !estPleine(k, plages[k])).map(([k, def]) => (
+            <ActiveChip key={k} label={`${def.label} ${plages[k][0]}–${plages[k][1]}${def.unite}`}
+              onRemove={() => setPlages((p) => ({ ...p, [k]: bornesPleines(k) }))} />
+          ))}
           {platformFilter !== "all" && <ActiveChip label={`Console : ${platformFilter}`} onRemove={() => setPlatformFilter("all")} />}
           {[...active].map((k) => (
             <ActiveChip key={k} label={findFilter(k)?.label ?? k} onRemove={() => toggleFilter(k)} />
@@ -463,6 +517,22 @@ export function GamesView({
               </div>
             </div>
           ))}
+          <div className="border-t pt-3">
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Fourchettes</div>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                <Checkbox checked={sansInfo} onCheckedChange={(c) => setSansInfo(!!c)} />
+                Garder les jeux dont l&apos;info manque
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              {Object.entries(PLAGES).map(([k, def]) => (
+                <Fourchette key={k} k={k} def={def} bornes={plages[k]}
+                  onChange={(b) => setPlages((p) => ({ ...p, [k]: b }))} />
+              ))}
+            </div>
+          </div>
+
           <div className="flex flex-wrap gap-2.5 border-t pt-3">
             <Select value={platformFilter} onValueChange={setPlatformFilter}>
               <SelectTrigger className="w-[190px]"><SelectValue placeholder="Console" /></SelectTrigger>
@@ -490,7 +560,7 @@ export function GamesView({
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[1060px] text-sm">
+            <table className="w-full min-w-[1120px] text-sm">
               <thead>
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="w-9 p-2.5">
@@ -503,9 +573,7 @@ export function GamesView({
                   <th className="cursor-pointer p-2.5" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</th>
                   <th className="cursor-pointer p-2.5" onClick={() => changeSort("note")}>Note{arrow("note")}</th>
                   <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</th>
-                  <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("duree")}>Durée{arrow("duree")}</th>
                   <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("sortie")}>Sortie{arrow("sortie")}</th>
-                  <th className="hidden p-2.5 md:table-cell">Liens</th>
                 </tr>
               </thead>
               <tbody>
@@ -547,6 +615,36 @@ export function GamesView({
 
       <SelectionBar games={selectedGames} lists={lists} currentSlug={list.slug}
         onClear={() => setSelected(new Set())} canManage={canManage} />
+    </div>
+  );
+}
+
+/** deux menus min/max — plus lisible et plus sûr au clavier qu'un double curseur */
+function Fourchette({
+  k, def, bornes, onChange,
+}: {
+  k: string;
+  def: { label: string; unite: string; opts: number[] };
+  bornes: Bornes;
+  onChange: (b: Bornes) => void;
+}) {
+  const max = def.opts[def.opts.length - 1];
+  const fmt = (v: number) => `${v}${def.unite}${v === max && k !== "note" ? "+" : ""}`;
+  const actif = !estPleine(k, bornes);
+  return (
+    <div className="space-y-1">
+      <div className={cn("text-xs font-semibold", actif ? "text-primary" : "text-muted-foreground")}>{def.label}</div>
+      <div className="flex items-center gap-1.5">
+        <Select value={String(bornes[0])} onValueChange={(v) => onChange([+v, Math.max(+v, bornes[1])])}>
+          <SelectTrigger size="sm" className="w-[86px]"><SelectValue /></SelectTrigger>
+          <SelectContent>{def.opts.map((o) => <SelectItem key={o} value={String(o)}>{fmt(o)}</SelectItem>)}</SelectContent>
+        </Select>
+        <span className="text-xs text-muted-foreground">à</span>
+        <Select value={String(bornes[1])} onValueChange={(v) => onChange([Math.min(+v, bornes[0]), +v])}>
+          <SelectTrigger size="sm" className="w-[86px]"><SelectValue /></SelectTrigger>
+          <SelectContent>{def.opts.map((o) => <SelectItem key={o} value={String(o)}>{fmt(o)}</SelectItem>)}</SelectContent>
+        </Select>
+      </div>
     </div>
   );
 }
@@ -664,14 +762,23 @@ const Row = memo(function Row({
       <td className="p-2.5 align-top">
         <Checkbox checked={checked} onCheckedChange={(c) => onCheck(g.id, !!c)} aria-label={`Sélectionner ${g.titre}`} />
       </td>
-      <td className="p-2.5">
+      <td className="min-w-[320px] p-2.5">
         <div className="flex items-center gap-3">
           <Thumb g={g} href={`/l/${slug}/${slugifyTitle(g.titre)}`} onOpen={() => onOpen(g)} />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <Link href={`/l/${slug}/${slugifyTitle(g.titre)}`}
               onClick={(e) => { if (clicSimple(e)) { e.preventDefault(); onOpen(g); } }}
-              className="block max-w-[230px] truncate text-left font-bold hover:text-primary hover:underline">{g.titre}</Link>
-            <div className="max-w-[230px] truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
+              className="block truncate text-left text-[15px] font-bold hover:text-primary hover:underline">{g.titre}</Link>
+            <div className="truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
+            <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+              {g.dureeVie && <span title="durée de vie approximative">⏱ {g.dureeVie}</span>}
+              {g.urlSteam && <a href={g.urlSteam} target="_blank" rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()} className="hover:text-primary hover:underline">Steam ↗</a>}
+              {g.urlPsn && <a href={g.urlPsn} target="_blank" rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()} className="hover:text-primary hover:underline">PS ↗</a>}
+              {g.urlStore && g.urlStore !== g.urlSteam && <a href={g.urlStore} target="_blank" rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()} className="hover:text-primary hover:underline">Deal ↗</a>}
+            </div>
           </div>
         </div>
       </td>
@@ -717,27 +824,19 @@ const Row = memo(function Row({
           <>
             <span className="inline-flex min-w-[34px] items-center justify-center rounded-md px-1.5 py-1 text-[13px] font-extrabold" style={{ background: noteColor(n) + "22", color: noteColor(n) }}>{n}</span>
             {(g.noteSource || g.steamPct != null) && (
-              <div className="mt-0.5 text-[10px] text-muted-foreground">{g.noteSource}{g.steamPct != null && !/Steam/.test(g.noteSource ?? "") ? ` · 👍 ${g.steamPct}%` : ""}</div>
+              <div className="mt-0.5 text-[10px] text-muted-foreground">
+                {/* « Steam 35166 avis » → « Steam » : le compte est juste en dessous */}
+                {(g.noteSource ?? "").replace(/\s*[\d\s]+avis/i, "")}
+                {g.steamPct != null && !/Steam/.test(g.noteSource ?? "") ? ` · 👍 ${g.steamPct}%` : ""}
+              </div>
             )}
           </>
         )}
         <Popularite g={g} />
       </td>
       <td className="hidden p-2.5 md:table-cell">{g.nbJoueurs || <span className="text-muted-foreground">—</span>}</td>
-      <td className="hidden p-2.5 whitespace-nowrap md:table-cell">
-        {g.dureeVie ? <span title="durée de vie approximative">⏱ {g.dureeVie}</span> : <span className="text-muted-foreground">—</span>}
-      </td>
       <td className="hidden p-2.5 md:table-cell">
         {txt ? <span className={released ? "font-bold text-emerald-500" : "text-muted-foreground"}>{txt}</span> : <span className="text-muted-foreground">{g.sortiePrec || "—"}</span>}
-      </td>
-      <td className="hidden p-2.5 md:table-cell">
-        <div className="flex gap-2 text-xs font-semibold">
-          {g.urlSteam && <a className="text-primary hover:underline" href={g.urlSteam} target="_blank" rel="noopener noreferrer">Steam</a>}
-          {g.urlPsn && <a className="text-primary hover:underline" href={g.urlPsn} target="_blank" rel="noopener noreferrer">PS</a>}
-          {g.urlStore && g.urlStore !== g.urlSteam && <a className="text-primary hover:underline" href={g.urlStore} target="_blank" rel="noopener noreferrer">Deal</a>}
-          {g.reel && <a className="text-primary hover:underline" href={g.reel} target="_blank" rel="noopener noreferrer">Source</a>}
-          {!g.urlSteam && !g.urlStore && !g.reel && !g.urlPsn && <span className="text-muted-foreground">—</span>}
-        </div>
       </td>
     </tr>
   );

@@ -21,7 +21,7 @@ export async function SiteHeader({
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3">
+      <div className="mx-auto flex max-w-[1500px] items-center gap-2 px-4 py-3">
         <Link href="/" className="mr-1 text-lg font-bold tracking-tight">🎮</Link>
         <ListSwitcher currentName={currentName} publicLists={publicLists} userLists={userLists} />
         {session?.user && (

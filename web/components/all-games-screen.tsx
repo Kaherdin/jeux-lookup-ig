@@ -57,7 +57,7 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
   return (
     <>
       <SiteHeader currentSlug="" currentName={titre.replace("🎮 ", "")} />
-      <main className="mx-auto max-w-6xl px-4 py-6 pb-24">
+      <main className="mx-auto max-w-[1500px] px-4 py-6 pb-24">
         <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{titre}</h1>
