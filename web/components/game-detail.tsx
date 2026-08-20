@@ -8,13 +8,17 @@ import { rescanGame, deleteGameAction } from "@/app/actions/games";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { GameGallery } from "@/components/game-gallery";
+import { AddToList } from "@/components/add-to-list";
 
 const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
 const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
 
 /** Contenu de la fiche d'un jeu — rendu par la page /l/[slug]/[jeu]. */
-export function GameDetail({ g, slug, canManage }: { g: Game; slug: string; canManage: boolean }) {
+export function GameDetail({
+  g, slug, canManage, lists = [],
+}: { g: Game; slug: string; canManage: boolean; lists?: { slug: string; name: string }[] }) {
   const p = prixVal(g);
   const n = noteVal(g);
   const dev = g.prix?.devise ?? "CHF";
@@ -36,8 +40,10 @@ export function GameDetail({ g, slug, canManage }: { g: Game; slug: string; canM
           <h1 className="text-2xl font-bold tracking-tight">{g.titre}</h1>
           <div className="mt-1 text-sm text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
         </div>
-        {canManage && slug && (
-          <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <AddToList gameId={g.id} lists={lists} currentSlug={slug} />
+          {canManage && slug && (
+          <>
             <Button size="sm" variant="outline" disabled={rescan.isPending}
               onClick={() => rescan.execute({ slug, titre: g.titre })}>
               {rescan.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />} Rescanner
@@ -47,8 +53,9 @@ export function GameDetail({ g, slug, canManage }: { g: Game; slug: string; canM
               onClick={() => { if (confirm(`Supprimer « ${g.titre} » de cette liste ?`)) suppr.execute({ slug, id: g.id }); }}>
               {suppr.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />} Supprimer
             </Button>
-          </div>
-        )}
+          </>
+          )}
+        </div>
       </div>
 
       {/* infos */}
@@ -97,15 +104,7 @@ export function GameDetail({ g, slug, canManage }: { g: Game; slug: string; canM
         </div>
       ) : null}
 
-      {g.screenshots?.length > 0 && (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {g.screenshots.map((s, i) => (
-            <a key={i} href={https(s)} target="_blank" rel="noopener noreferrer">
-              <img src={https(s)} alt="" loading="lazy" className="aspect-video w-full rounded-md object-cover transition hover:opacity-80" />
-            </a>
-          ))}
-        </div>
-      )}
+      {g.screenshots?.length > 0 && <GameGallery screenshots={g.screenshots} titre={g.titre} />}
 
       {!g.trailer && !g.trailerYoutube && !g.screenshots?.length && (
         <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">

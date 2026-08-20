@@ -5,7 +5,7 @@ import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
 import { LogOut, User as UserIcon, RefreshCw, Loader2, Library, Gamepad2 } from "lucide-react";
 import { signOut } from "@/lib/auth-client";
-import { rescanList } from "@/app/actions/games";
+import { rescanList, importSteam } from "@/app/actions/games";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -19,6 +19,21 @@ export function UserMenu({
   rescanName?: string;
 }) {
   const router = useRouter();
+  // resynchro de la bibliothèque Steam directement depuis le menu : c'est le geste
+  // qu'on refait souvent (nouveaux jeux achetés), il n'a pas à passer par /compte.
+  const syncSteam = useAction(importSteam, {
+    onSuccess: ({ data }) => {
+      toast.success(data?.added ? `${data.added} nouveau(x) jeu(x) Steam (sur ${data.total}).` : "Bibliothèque Steam déjà à jour.");
+      router.refresh();
+    },
+    onError: ({ error }) => {
+      const msg = error.serverError ?? "Échec de la synchronisation Steam.";
+      toast.error(msg, /non lié|non configur/i.test(msg)
+        ? { action: { label: "Lier Steam", onClick: () => router.push("/compte") } }
+        : undefined);
+    },
+  });
+
   const rescan = useAction(rescanList, {
     onSuccess: ({ data }) => { toast.success(`${data?.count ?? 0} jeu(x) re-scanné(s).`); router.refresh(); },
     onError: ({ error }) => toast.error(error.serverError ?? "Échec du re-scan."),
@@ -31,7 +46,7 @@ export function UserMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="icon" aria-label="Compte">
-          {rescan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserIcon className="h-4 w-4" />}
+          {rescan.isPending || syncSteam.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserIcon className="h-4 w-4" />}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-60">
@@ -39,6 +54,11 @@ export function UserMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link href="/mes-jeux"><Library className="mr-2 h-4 w-4" /> Tous mes jeux</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={syncSteam.isPending}
+          onSelect={(e) => { e.preventDefault(); syncSteam.execute({}); }}>
+          {syncSteam.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+          Resynchroniser ma bibliothèque Steam
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link href="/compte"><Gamepad2 className="mr-2 h-4 w-4" /> Mon compte &amp; bibliothèques</Link>
