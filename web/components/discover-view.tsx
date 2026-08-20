@@ -10,15 +10,18 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
+import { CATEGORIES } from "@/lib/categories";
 
 // IGDB ids
 const PLATFORMS: [number, string][] = [[6, "PC"], [167, "PS5"], [48, "PS4"], [130, "Switch"], [169, "Xbox Series"], [49, "Xbox One"]];
-const GENRES: [number, string][] = [[12, "RPG"], [31, "Aventure"], [5, "Tir"], [8, "Plateforme"], [25, "Action"], [4, "Combat"], [15, "Stratégie"], [24, "Tactique"], [10, "Course"], [14, "Sport"], [13, "Simulation"], [9, "Puzzle"], [33, "Arcade"], [32, "Indé"], [36, "MOBA"]];
+// mêmes familles que la page des listes — pas deux vocabulaires à retenir.
+// « Autre » n'a pas d'équivalent IGDB : on ne le propose pas ici.
+const FAMILLES = CATEGORIES.filter((c) => c.igdbGenres.length || c.igdbThemes.length);
 const MODES: [number, string][] = [[1, "Solo"], [2, "Multi"], [3, "Coop"], [6, "Battle Royale"]];
 
 export function DiscoverView({ lists }: { lists: { slug: string; name: string }[] }) {
   const [platforms, setPlatforms] = useState<Set<number>>(new Set());
-  const [genres, setGenres] = useState<Set<number>>(new Set());
+  const [familles, setFamilles] = useState<Set<string>>(new Set());
   const [modes, setModes] = useState<Set<number>>(new Set());
   const [coopLocal, setCoopLocal] = useState(false);
   const [playersMin, setPlayersMin] = useState("0");
@@ -49,8 +52,12 @@ export function DiscoverView({ lists }: { lists: { slug: string; name: string }[
 
   function run() {
     setResults(null);
+    const picked = FAMILLES.filter((c) => familles.has(c.key));
     search.execute({
-      platforms: [...platforms], genres: [...genres], modes: [...modes],
+      platforms: [...platforms],
+      genres: [...new Set(picked.flatMap((c) => c.igdbGenres))],
+      themes: [...new Set(picked.flatMap((c) => c.igdbThemes))],
+      modes: [...modes],
       coopLocal, playersMin: +playersMin, noteMin: +noteMin, sinceYear: +sinceYear, sort,
     });
   }
@@ -64,7 +71,21 @@ export function DiscoverView({ lists }: { lists: { slug: string; name: string }[
 
       <div className="space-y-4 rounded-xl border bg-card p-4">
         <Field label="Plateforme"><ChipGroup opts={PLATFORMS} sel={platforms} setSel={setPlatforms} /></Field>
-        <Field label="Type de jeu"><ChipGroup opts={GENRES} sel={genres} setSel={setGenres} /></Field>
+        <Field label="Type de jeu">
+          <div className="flex flex-wrap gap-1.5">
+            {FAMILLES.map((c) => {
+              const on = familles.has(c.key);
+              return (
+                <button key={c.key} title={c.hint}
+                  onClick={() => setFamilles((prev) => { const n = new Set(prev); n.has(c.key) ? n.delete(c.key) : n.add(c.key); return n; })}
+                  className={cn("rounded-full border px-3 py-1 text-[13px] font-medium transition",
+                    on ? "border-primary bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:border-primary")}>
+                  {c.emoji} {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
         <Field label="Mode"><ChipGroup opts={MODES} sel={modes} setSel={setModes} /></Field>
 
         <div className="flex flex-wrap items-end gap-4">

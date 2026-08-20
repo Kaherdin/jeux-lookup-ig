@@ -1,7 +1,7 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, useDeferredValue, memo } from "react";
 import Link from "next/link";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Search, SlidersHorizontal, X, Check } from "lucide-react";
 import type { Game, ListMeta } from "@/lib/types";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, slugifyTitle } from "@/lib/utils";
 import { SelectionBar } from "@/components/selection-bar";
+import { CATEGORIES, CATEGORY_BY_KEY, categorize, type CategoryKey } from "@/lib/categories";
 
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
 const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
@@ -17,15 +18,15 @@ const md = (g: Game) => g.modes ?? {};
 const noteColor = (n: number) => (n >= 85 ? "#3fb950" : n >= 75 ? "#f5c518" : n >= 60 ? "#ff8c42" : "#f85149");
 const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
+/** nombre de lignes rendues d'un coup — au-delà, un bouton « en afficher plus » */
+const PAGE = 60;
+
 function fmtDate(iso: string | null) {
   if (!iso) return { txt: "", released: false };
   const p = iso.split("-");
   const txt = p.length >= 3 ? `${+p[2]} ${MOIS[+p[1] - 1]} ${p[0]}` : p.length === 2 ? `${MOIS[+p[1] - 1]} ${p[0]}` : p[0];
   const today = new Date().toISOString().slice(0, 10);
   return { txt, released: iso <= today.slice(0, iso.length) };
-}
-function genreTokens(g: Game) {
-  return (g.genre ?? "").split(/[,/]/).map((s) => s.trim()).filter(Boolean);
 }
 function modesDetailText(g: Game) {
   const d = g.modesDetail ?? {};
@@ -98,6 +99,11 @@ const GROUPS: { titre: string; items: FilterDef[] }[] = [
 const ALL_FILTERS = GROUPS.flatMap((g) => g.items);
 const findFilter = (k: string) => ALL_FILTERS.find((f) => f.key === k);
 
+/** un jeu + tout ce qui sert à le filtrer, calculé UNE fois pour toute la liste */
+type Indexed = { g: Game; key: string; hay: string; cats: CategoryKey[] };
+
+const splitCsv = (s: string | null) => new Set((s ?? "").split(",").filter(Boolean));
+
 export function GamesView({
   games, list, canManage, lists = [], ownedTitles = [], showOwned = false,
 }: {
@@ -108,45 +114,73 @@ export function GamesView({
   ownedTitles?: string[];
   showOwned?: boolean;
 }) {
-  const router = useRouter();
-  const pathname = usePathname();
+  // ── état des filtres : local, jamais routé ──────────────────────────
+  // Avant, la source de vérité était l'URL via router.replace() : chaque frappe et
+  // chaque clic déclenchait une navigation Next → re-render serveur → re-requête de
+  // TOUTE la liste. On lit l'URL une fois au montage (liens partagés, rechargement),
+  // puis on n'y écrit plus qu'avec history.replaceState — zéro aller-retour serveur.
   const sp = useSearchParams();
-
-  // ── état des filtres : la source de vérité est l'URL ────────────────
-  // rechargement, retour arrière et partage de lien fonctionnent gratuitement.
-  const q = sp.get("q") ?? "";
-  const genreFilter = sp.get("g") ?? "all";
-  const platformFilter = sp.get("p") ?? "all";
-  const active = useMemo(() => new Set((sp.get("f") ?? "").split(",").filter(Boolean)), [sp]);
-  const sortKey = sp.get("tri") ?? "note";
-  const sortDir = sp.get("sens") ? (sp.get("sens") === "asc" ? 1 : -1) : (SORT_DEFDIR[sortKey] ?? -1);
-
-  const setParams = useCallback((patch: Record<string, string | null>) => {
-    const p = new URLSearchParams(sp.toString());
-    for (const [k, v] of Object.entries(patch)) { if (v) p.set(k, v); else p.delete(k); }
-    const qs = p.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [router, pathname, sp]);
-
-  // la recherche est tapée au clavier : on ne réécrit l'URL qu'après une pause
-  const [qInput, setQInput] = useState(q);
-  useEffect(() => { setQInput(q); }, [q]);
-  useEffect(() => {
-    const t = setTimeout(() => { if (qInput !== q) setParams({ q: qInput || null }); }, 300);
-    return () => clearTimeout(t);
-  }, [qInput]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [q, setQ] = useState(() => sp.get("q") ?? "");
+  const [cats, setCats] = useState<Set<string>>(() => {
+    const s = splitCsv(sp.get("c"));
+    // ancien lien « ?g=Souls-like » (genre exact) → on retombe sur sa famille
+    const legacy = sp.get("g");
+    if (legacy) for (const k of categorize(legacy)) if (k !== "autre") s.add(k);
+    return s;
+  });
+  const [platformFilter, setPlatformFilter] = useState(() => sp.get("p") ?? "all");
+  const [active, setActive] = useState<Set<string>>(() => splitCsv(sp.get("f")));
+  const [sortKey, setSortKey] = useState(() => sp.get("tri") ?? "note");
+  const [sortDir, setSortDir] = useState(() => {
+    const s = sp.get("sens");
+    return s ? (s === "asc" ? 1 : -1) : SORT_DEFDIR[sp.get("tri") ?? "note"] ?? -1;
+  });
 
   const [panel, setPanel] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [limit, setLimit] = useState(PAGE);
+
+  // la frappe reste fluide : le filtrage utilise une valeur « en retard » que React
+  // recalcule en tâche de fond pendant que l'input, lui, répond au clavier.
+  const deferredQ = useDeferredValue(q);
+  const qq = deferredQ.toLowerCase().trim();
+
+  // ── URL en écriture seule, sans navigation ──────────────────────────
+  const skipFirst = useRef(true);
+  useEffect(() => {
+    if (skipFirst.current) { skipFirst.current = false; return; }
+    const t = setTimeout(() => {
+      const p = new URLSearchParams(window.location.search);
+      const put = (k: string, v: string | null) => (v ? p.set(k, v) : p.delete(k));
+      put("q", q.trim() || null);
+      put("c", [...cats].join(",") || null);
+      put("g", null); // l'ancien paramètre « genre exact » n'existe plus
+      put("p", platformFilter === "all" ? null : platformFilter);
+      put("f", [...active].join(",") || null);
+      put("tri", sortKey === "note" ? null : sortKey);
+      put("sens", sortDir === (SORT_DEFDIR[sortKey] ?? -1) ? null : sortDir === 1 ? "asc" : "desc");
+      const qs = p.toString();
+      const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+      if (url !== window.location.pathname + window.location.search) window.history.replaceState(null, "", url);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [q, cats, platformFilter, active, sortKey, sortDir]);
 
   const owned = useMemo(() => new Set(ownedTitles.map((t) => t.toLowerCase())), [ownedTitles]);
   const groups = useMemo(() => GROUPS.filter((g) => g.titre !== "Ma bibliothèque" || showOwned), [showOwned]);
 
-  const genres = useMemo(() => {
-    const c = new Map<string, number>();
-    for (const g of games) for (const t of genreTokens(g)) c.set(t, (c.get(t) ?? 0) + 1);
-    return [...c.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).map(([t]) => t);
-  }, [games]);
+  // ── index calculé une seule fois ────────────────────────────────────
+  // minuscules de recherche + familles de genres : sinon on refaisait toLowerCase()
+  // et l'analyse du genre pour chaque jeu, à chaque frappe, pour chaque compteur.
+  const index = useMemo<Indexed[]>(
+    () => games.map((g) => ({
+      g,
+      key: g.titre.toLowerCase(),
+      hay: `${g.titre} ${g.genre ?? ""} ${g.univers ?? ""}`.toLowerCase(),
+      cats: categorize(g.genre, g.themes),
+    })),
+    [games]
+  );
 
   const platforms = useMemo(() => {
     const c = new Map<string, number>();
@@ -154,38 +188,59 @@ export function GamesView({
     return [...c.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
   }, [games]);
 
+  // familles présentes dans cette liste, les plus fournies d'abord
+  const catList = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const it of index) for (const k of it.cats) c.set(k, (c.get(k) ?? 0) + 1);
+    return CATEGORIES.filter((cat) => c.has(cat.key)).sort((a, b) => (c.get(b.key) ?? 0) - (c.get(a.key) ?? 0));
+  }, [index]);
+
   // ── filtrage ────────────────────────────────────────────────────────
   // `except` permet de compter ce que donnerait CHAQUE filtre sans lui-même :
   // les compteurs affichés tiennent compte des autres critères actifs.
-  const keep = useCallback((g: Game, except?: string) => {
-    const s = q.toLowerCase().trim();
-    if (except !== "q" && s && !(g.titre + " " + (g.genre ?? "") + " " + (g.univers ?? "")).toLowerCase().includes(s)) return false;
-    if (except !== "genre" && genreFilter !== "all" && !genreTokens(g).some((t) => t.toLowerCase() === genreFilter.toLowerCase())) return false;
-    if (except !== "plat" && platformFilter !== "all" && !(g.plateformes ?? []).includes(platformFilter)) return false;
+  const keep = useCallback((it: Indexed, except?: string) => {
+    if (except !== "q" && qq && !it.hay.includes(qq)) return false;
+    if (except !== "cat" && cats.size && !it.cats.some((k) => cats.has(k))) return false;
+    if (except !== "plat" && platformFilter !== "all" && !(it.g.plateformes ?? []).includes(platformFilter)) return false;
     for (const k of active) {
       if (k === except) continue;
       const f = findFilter(k);
-      if (f && !f.test(g, owned)) return false;
+      if (f && !f.test(it.g, owned)) return false;
     }
     return true;
-  }, [q, genreFilter, platformFilter, active, owned]);
+  }, [qq, cats, platformFilter, active, owned]);
 
   const shown = useMemo(() => {
-    const l = games.filter((g) => keep(g));
+    const l = index.filter((it) => keep(it));
     const val = SORT_VAL[sortKey] ?? SORT_VAL.note;
     l.sort((a, b) => {
-      const va = val(a), vb = val(b);
+      const va = val(a.g), vb = val(b.g);
       const r = va < vb ? -1 : va > vb ? 1 : 0;
-      return r * sortDir || a.titre.localeCompare(b.titre);
+      return r * sortDir || a.g.titre.localeCompare(b.g.titre);
     });
     return l;
-  }, [games, keep, sortKey, sortDir]);
+  }, [index, keep, sortKey, sortDir]);
 
+  // on ne repart du haut que quand les critères changent (pas au tri, pas à la sélection)
+  useEffect(() => { setLimit(PAGE); }, [qq, cats, platformFilter, active]);
+  const visible = useMemo(() => shown.slice(0, limit), [shown, limit]);
+
+  // compteurs : seulement quand le panneau est ouvert — inutile de payer 11 passes sinon
   const counts = useMemo(() => {
     const out: Record<string, number> = {};
-    for (const f of ALL_FILTERS) out[f.key] = games.filter((g) => keep(g, f.key) && f.test(g, owned)).length;
+    if (!panel) return out;
+    for (const f of ALL_FILTERS) {
+      let n = 0;
+      for (const it of index) if (f.test(it.g, owned) && keep(it, f.key)) n++;
+      out[f.key] = n;
+    }
+    for (const cat of CATEGORIES) {
+      let n = 0;
+      for (const it of index) if (it.cats.includes(cat.key) && keep(it, "cat")) n++;
+      out["cat:" + cat.key] = n;
+    }
     return out;
-  }, [games, keep, owned]);
+  }, [panel, index, keep, owned]);
 
   const stats = useMemo(() => {
     const base: [string, number][] = [
@@ -198,23 +253,36 @@ export function GamesView({
     return base;
   }, [games, owned, showOwned]);
 
-  function toggleFilter(k: string) {
-    const n = new Set(active);
-    n.has(k) ? n.delete(k) : n.add(k);
-    // « je l'ai déjà » et « pas encore » s'excluent
-    if (k === "possede") n.delete("manque");
-    if (k === "manque") n.delete("possede");
-    setParams({ f: [...n].join(",") || null });
-  }
+  const toggleFilter = useCallback((k: string) => {
+    setActive((prev) => {
+      const n = new Set(prev);
+      n.has(k) ? n.delete(k) : n.add(k);
+      // « je l'ai déjà » et « pas encore » s'excluent
+      if (k === "possede") n.delete("manque");
+      if (k === "manque") n.delete("possede");
+      return n;
+    });
+  }, []);
+
+  const toggleCat = useCallback((k: string) => {
+    setCats((prev) => {
+      const n = new Set(prev);
+      n.has(k) ? n.delete(k) : n.add(k);
+      return n;
+    });
+  }, []);
+
   function resetAll() {
-    setParams({ q: null, g: null, p: null, f: null });
-    setQInput("");
+    setQ("");
+    setCats(new Set());
+    setPlatformFilter("all");
+    setActive(new Set());
   }
-  const nbActifs = active.size + (genreFilter !== "all" ? 1 : 0) + (platformFilter !== "all" ? 1 : 0) + (q ? 1 : 0);
+  const nbActifs = active.size + cats.size + (platformFilter !== "all" ? 1 : 0) + (q ? 1 : 0);
 
   const changeSort = (k: string) => {
-    if (k === sortKey) setParams({ sens: sortDir === 1 ? "desc" : "asc" });
-    else setParams({ tri: k, sens: (SORT_DEFDIR[k] ?? -1) === 1 ? "asc" : "desc" });
+    if (k === sortKey) setSortDir((d) => -d);
+    else { setSortKey(k); setSortDir(SORT_DEFDIR[k] ?? -1); }
   };
   const arrow = (k: string) => (sortKey === k ? (sortDir === 1 ? " ▲" : " ▼") : "");
 
@@ -223,9 +291,13 @@ export function GamesView({
     [games]
   );
 
-  const allShownSelected = shown.length > 0 && shown.every((g) => selected.has(g.id));
+  const onCheck = useCallback((id: string, c: boolean) => {
+    setSelected((prev) => { const n = new Set(prev); c ? n.add(id) : n.delete(id); return n; });
+  }, []);
+
+  const allShownSelected = shown.length > 0 && shown.every((it) => selected.has(it.g.id));
   function toggleSelectAll() {
-    setSelected(allShownSelected ? new Set() : new Set(shown.map((g) => g.id)));
+    setSelected(allShownSelected ? new Set() : new Set(shown.map((it) => it.g.id)));
   }
   const selectedGames = useMemo(() => games.filter((g) => selected.has(g.id)), [games, selected]);
 
@@ -262,28 +334,47 @@ export function GamesView({
 
       {/* barre principale : recherche + filtres + tri */}
       <div className="flex flex-wrap items-center gap-2.5">
-        <Input placeholder="Rechercher un titre, un genre, un univers…" value={qInput}
-          onChange={(e) => setQInput(e.target.value)} className="min-w-[220px] flex-1" />
+        <Input placeholder="Rechercher un titre, un genre, un univers…" value={q}
+          onChange={(e) => setQ(e.target.value)} className="min-w-[220px] flex-1" />
         <Button variant={panel || nbActifs ? "default" : "outline"} onClick={() => setPanel((v) => !v)}>
           <SlidersHorizontal className="mr-1 h-4 w-4" /> Filtres{nbActifs ? ` (${nbActifs})` : ""}
         </Button>
-        <Select value={sortKey} onValueChange={(v) => setParams({ tri: v, sens: (SORT_DEFDIR[v] ?? -1) === 1 ? "asc" : "desc" })}>
+        <Select value={sortKey} onValueChange={(v) => { setSortKey(v); setSortDir(SORT_DEFDIR[v] ?? -1); }}>
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {Object.entries(SORT_LABEL).map(([k, l]) => <SelectItem key={k} value={k}>Tri : {l}</SelectItem>)}
           </SelectContent>
         </Select>
         <Button variant="outline" size="icon" title="Inverser le sens"
-          onClick={() => setParams({ sens: sortDir === 1 ? "desc" : "asc" })}>{sortDir === 1 ? "▲" : "▼"}</Button>
+          onClick={() => setSortDir((d) => -d)}>{sortDir === 1 ? "▲" : "▼"}</Button>
         <Button asChild variant="outline"><Link href="/decouvrir"><Search className="mr-1 h-4 w-4" /> Trouver un jeu</Link></Button>
       </div>
+
+      {/* familles de jeux, toujours visibles : c'est le filtre le plus utilisé */}
+      {catList.length > 1 && (
+        <div className="flex flex-wrap gap-1.5">
+          {catList.map((cat) => {
+            const on = cats.has(cat.key);
+            return (
+              <button key={cat.key} onClick={() => toggleCat(cat.key)} title={cat.hint}
+                className={cn("rounded-full border px-3 py-1 text-[13px] font-semibold transition",
+                  on ? "border-primary bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:border-primary")}>
+                {cat.emoji} {cat.label}
+              </button>
+            );
+          })}
+          {cats.size > 0 && <Button variant="ghost" size="sm" onClick={() => setCats(new Set())}>Toutes</Button>}
+        </div>
+      )}
 
       {/* filtres actifs, retirables un par un */}
       {nbActifs > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          {q && <ActiveChip label={`« ${q} »`} onRemove={() => { setQInput(""); setParams({ q: null }); }} />}
-          {genreFilter !== "all" && <ActiveChip label={`Genre : ${genreFilter}`} onRemove={() => setParams({ g: null })} />}
-          {platformFilter !== "all" && <ActiveChip label={`Console : ${platformFilter}`} onRemove={() => setParams({ p: null })} />}
+          {q && <ActiveChip label={`« ${q} »`} onRemove={() => setQ("")} />}
+          {[...cats].map((k) => (
+            <ActiveChip key={k} label={`${CATEGORY_BY_KEY[k]?.emoji ?? ""} ${CATEGORY_BY_KEY[k]?.label ?? k}`} onRemove={() => toggleCat(k)} />
+          ))}
+          {platformFilter !== "all" && <ActiveChip label={`Console : ${platformFilter}`} onRemove={() => setPlatformFilter("all")} />}
           {[...active].map((k) => (
             <ActiveChip key={k} label={findFilter(k)?.label ?? k} onRemove={() => toggleFilter(k)} />
           ))}
@@ -294,6 +385,24 @@ export function GamesView({
       {/* panneau de filtres */}
       {panel && (
         <div className="space-y-4 rounded-xl border bg-card p-4">
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type de jeu</div>
+            <div className="flex flex-wrap gap-2">
+              {catList.map((cat) => {
+                const on = cats.has(cat.key);
+                const n = counts["cat:" + cat.key] ?? 0;
+                return (
+                  <button key={cat.key} onClick={() => toggleCat(cat.key)} disabled={!on && n === 0} title={cat.hint}
+                    className={cn("rounded-full border px-3 py-1.5 text-[13px] font-semibold transition",
+                      on ? "border-primary bg-primary text-primary-foreground"
+                        : n === 0 ? "cursor-not-allowed border-dashed text-muted-foreground/40"
+                          : "bg-background text-muted-foreground hover:border-primary")}>
+                    {cat.emoji} {cat.label} <span className={cn("ml-0.5 font-normal", on ? "opacity-80" : "opacity-60")}>{n}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           {groups.map((grp) => (
             <div key={grp.titre}>
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{grp.titre}</div>
@@ -315,14 +424,7 @@ export function GamesView({
             </div>
           ))}
           <div className="flex flex-wrap gap-2.5 border-t pt-3">
-            <Select value={genreFilter} onValueChange={(v) => setParams({ g: v === "all" ? null : v })}>
-              <SelectTrigger className="w-[190px]"><SelectValue placeholder="Genre" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Tous les genres</SelectItem>
-                {genres.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={platformFilter} onValueChange={(v) => setParams({ p: v === "all" ? null : v })}>
+            <Select value={platformFilter} onValueChange={setPlatformFilter}>
               <SelectTrigger className="w-[190px]"><SelectValue placeholder="Console" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Toutes les consoles</SelectItem>
@@ -346,34 +448,43 @@ export function GamesView({
         <EmptyState titre="Aucun jeu ne correspond" texte="Les filtres actifs ne laissent rien passer."
           action={<Button onClick={resetAll}>Réinitialiser les filtres</Button>} />
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[900px] text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="w-9 p-2.5">
-                  <Checkbox checked={allShownSelected} onCheckedChange={toggleSelectAll} aria-label="Tout sélectionner" />
-                </th>
-                <th className="cursor-pointer p-2.5 whitespace-nowrap" onClick={() => changeSort("titre")}>Jeu{arrow("titre")}</th>
-                <th className="p-2.5">Statut</th>
-                <th className="p-2.5">Modes</th>
-                <th className="hidden p-2.5 md:table-cell">Plateformes</th>
-                <th className="cursor-pointer p-2.5" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</th>
-                <th className="cursor-pointer p-2.5" onClick={() => changeSort("note")}>Note{arrow("note")}</th>
-                <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</th>
-                <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("sortie")}>Sortie{arrow("sortie")}</th>
-                <th className="hidden p-2.5 md:table-cell">Liens</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((g) => (
-                <Row key={g.id} g={g} slug={g.listSlug ?? list.slug}
-                  possede={showOwned && owned.has(g.titre.toLowerCase())}
-                  checked={selected.has(g.id)}
-                  onCheck={(c) => setSelected((prev) => { const n = new Set(prev); c ? n.add(g.id) : n.delete(g.id); return n; })} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="w-9 p-2.5">
+                    <Checkbox checked={allShownSelected} onCheckedChange={toggleSelectAll} aria-label="Tout sélectionner" />
+                  </th>
+                  <th className="cursor-pointer p-2.5 whitespace-nowrap" onClick={() => changeSort("titre")}>Jeu{arrow("titre")}</th>
+                  <th className="p-2.5">Statut</th>
+                  <th className="p-2.5">Modes</th>
+                  <th className="hidden p-2.5 md:table-cell">Plateformes</th>
+                  <th className="cursor-pointer p-2.5" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</th>
+                  <th className="cursor-pointer p-2.5" onClick={() => changeSort("note")}>Note{arrow("note")}</th>
+                  <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</th>
+                  <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("sortie")}>Sortie{arrow("sortie")}</th>
+                  <th className="hidden p-2.5 md:table-cell">Liens</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((it) => (
+                  <Row key={it.g.id} g={it.g} slug={it.g.listSlug ?? list.slug}
+                    possede={showOwned && owned.has(it.key)}
+                    checked={selected.has(it.g.id)}
+                    onCheck={onCheck} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {shown.length > visible.length && (
+            <div className="flex justify-center">
+              <Button variant="outline" onClick={() => setLimit((n) => n + PAGE * 2)}>
+                Afficher plus ({shown.length - visible.length} restants)
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       <SelectionBar games={selectedGames} lists={lists} currentSlug={list.slug}
@@ -404,9 +515,11 @@ function EmptyState({ titre, texte, action }: { titre: string; texte: string; ac
   );
 }
 
-function Row({
+// mémoïsée : une frappe ou un clic de filtre ne re-rend que les lignes qui changent
+// vraiment (props toutes primitives, `onCheck` stable côté parent).
+const Row = memo(function Row({
   g, slug, possede, checked, onCheck,
-}: { g: Game; slug: string; possede: boolean; checked: boolean; onCheck: (c: boolean) => void }) {
+}: { g: Game; slug: string; possede: boolean; checked: boolean; onCheck: (id: string, c: boolean) => void }) {
   const m = md(g);
   const p = prixVal(g);
   const n = noteVal(g);
@@ -417,7 +530,7 @@ function Row({
   return (
     <tr className={cn("border-b hover:bg-muted/40", checked && "bg-primary/5")}>
       <td className="p-2.5 align-top">
-        <Checkbox checked={checked} onCheckedChange={(c) => onCheck(!!c)} aria-label={`Sélectionner ${g.titre}`} />
+        <Checkbox checked={checked} onCheckedChange={(c) => onCheck(g.id, !!c)} aria-label={`Sélectionner ${g.titre}`} />
       </td>
       <td className="p-2.5">
         <div className="flex items-center gap-3">
@@ -491,4 +604,4 @@ function Row({
       </td>
     </tr>
   );
-}
+});
