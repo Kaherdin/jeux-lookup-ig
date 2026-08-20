@@ -19,22 +19,25 @@ const PLATFORMS: [number, string][] = [[6, "PC"], [167, "PS5"], [48, "PS4"], [13
 const FAMILLES = CATEGORIES.filter((c) => c.igdbGenres.length || c.igdbThemes.length);
 const MODES: [number, string][] = [[1, "Solo"], [2, "Multi"], [3, "Coop"], [6, "Battle Royale"]];
 
-export function DiscoverView({
-  lists, embedded = false, famillesInitiales, noteMinInitiale,
-}: {
-  lists: { slug: string; name: string }[];
-  /** rendu à l'intérieur de la page principale : pas de titre ni de fil d'Ariane */
-  embedded?: boolean;
-  /** reprend les critères déjà posés sur la collection — même vocabulaire des deux côtés */
-  famillesInitiales?: string[];
-  noteMinInitiale?: number;
-}) {
-  const [platforms, setPlatforms] = useState<Set<number>>(new Set());
-  const [familles, setFamilles] = useState<Set<string>>(() => new Set(famillesInitiales ?? []));
-  const [modes, setModes] = useState<Set<number>>(new Set());
-  const [coopLocal, setCoopLocal] = useState(false);
-  const [playersMin, setPlayersMin] = useState("0");
-  const [noteMin, setNoteMin] = useState(noteMinInitiale ? String(noteMinInitiale) : "0");
+/** critères posés dans le panneau de filtres, traduits ici pour IGDB */
+export type Criteres = {
+  familles: string[];
+  plateforme: string;
+  solo: boolean;
+  coop: boolean;
+  pvp: boolean;
+  canape: boolean;
+  noteMin: number;
+  joueursMin: number;
+};
+
+/** « PS5 », « Series X|S »… tels qu'ils sortent d'IGDB → identifiants de plateforme */
+const PLATFORM_IDS: [number, RegExp][] = [
+  [6, /^pc$|windows/i], [167, /ps5|playstation 5/i], [48, /ps4|playstation 4/i],
+  [130, /switch/i], [169, /series/i], [49, /xbox one/i],
+];
+
+export function DiscoverView({ lists, criteres }: { lists: { slug: string; name: string }[]; criteres: Criteres }) {
   const [sinceYear, setSinceYear] = useState("0");
   const [sort, setSort] = useState<"pop" | "note" | "recent">("pop");
   const [target, setTarget] = useState(lists[0]?.slug ?? "");
@@ -61,61 +64,52 @@ export function DiscoverView({
 
   function run() {
     setResults(null);
-    const picked = FAMILLES.filter((c) => familles.has(c.key));
+    const picked = FAMILLES.filter((c) => criteres.familles.includes(c.key));
+    const modes = [
+      ...(criteres.solo ? [1] : []),
+      ...(criteres.pvp ? [2] : []),
+      ...(criteres.coop ? [3] : []),
+    ];
+    const plat = PLATFORM_IDS.find(([, re]) => re.test(criteres.plateforme));
     search.execute({
-      platforms: [...platforms],
+      platforms: plat ? [plat[0]] : [],
       genres: [...new Set(picked.flatMap((c) => c.igdbGenres))],
       themes: [...new Set(picked.flatMap((c) => c.igdbThemes))],
-      modes: [...modes],
-      coopLocal, playersMin: +playersMin, noteMin: +noteMin, sinceYear: +sinceYear, sort,
+      modes,
+      coopLocal: criteres.canape,
+      playersMin: criteres.joueursMin,
+      noteMin: criteres.noteMin,
+      sinceYear: +sinceYear,
+      sort,
     });
   }
 
+  const resume = [
+    ...FAMILLES.filter((c) => criteres.familles.includes(c.key)).map((c) => `${c.emoji} ${c.label}`),
+    criteres.plateforme !== "all" ? criteres.plateforme : "",
+    criteres.solo ? "Solo" : "", criteres.coop ? "Coop" : "", criteres.pvp ? "PvP" : "",
+    criteres.canape ? "Canapé" : "",
+    criteres.noteMin ? `note ${criteres.noteMin}+` : "",
+    criteres.joueursMin ? `${criteres.joueursMin}+ joueurs` : "",
+  ].filter(Boolean);
+
   return (
-    <div className={embedded ? "" : "mx-auto max-w-[1500px] px-4 py-6"}>
-      {!embedded && (
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="flex items-center gap-2 text-2xl font-bold"><Search className="h-6 w-6" /> Trouver un jeu</h1>
-          <Link href="/" className="text-sm text-muted-foreground hover:text-foreground">← Retour aux listes</Link>
+    <div>
+      <div className="space-y-3 rounded-xl border bg-card p-4">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Critères repris du panneau :</span>
+          {resume.length ? resume.map((r) => (
+            <span key={r} className="rounded-full border bg-background px-2.5 py-0.5 text-[13px] font-medium">{r}</span>
+          )) : <span className="text-muted-foreground">aucun — toute la base IGDB</span>}
         </div>
-      )}
 
-      <div className="space-y-4 rounded-xl border bg-card p-4">
-        <Field label="Plateforme"><ChipGroup opts={PLATFORMS} sel={platforms} setSel={setPlatforms} /></Field>
-        <Field label="Type de jeu">
-          <div className="flex flex-wrap gap-1.5">
-            {FAMILLES.map((c) => {
-              const on = familles.has(c.key);
-              return (
-                <button key={c.key} title={c.hint}
-                  onClick={() => setFamilles((prev) => { const n = new Set(prev); n.has(c.key) ? n.delete(c.key) : n.add(c.key); return n; })}
-                  className={cn("rounded-full border px-3 py-1 text-[13px] font-medium transition",
-                    on ? "border-primary bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:border-primary")}>
-                  {c.emoji} {c.label}
-                </button>
-              );
-            })}
-          </div>
-        </Field>
-        <Field label="Mode"><ChipGroup opts={MODES} sel={modes} setSel={setModes} /></Field>
-
-        <div className="flex flex-wrap items-end gap-4">
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <Checkbox checked={coopLocal} onCheckedChange={(c) => setCoopLocal(!!c)} /> 🛋️ Coop locale / canapé
-          </label>
-          <Mini label="Joueurs min" value={playersMin} onChange={setPlayersMin}
-            opts={[["0", "Indiff."], ["2", "2+"], ["3", "3+"], ["4", "4+"], ["6", "6+"], ["8", "8+"]]} />
-          <Mini label="Note mini" value={noteMin} onChange={setNoteMin}
-            opts={[["0", "Indiff."], ["70", "70+"], ["80", "80+"], ["90", "90+"]]} />
+        <div className="flex flex-wrap items-end gap-4 border-t pt-3">
           <Mini label="Depuis" value={sinceYear} onChange={setSinceYear}
             opts={[["0", "Indiff."], ["2015", "2015+"], ["2020", "2020+"], ["2023", "2023+"]]} />
           <Mini label="Trier par" value={sort} onChange={(v) => setSort(v as typeof sort)}
             opts={[["pop", "Populaire"], ["note", "Mieux noté"], ["recent", "Récent"]]} />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3 border-t pt-3">
           <Button onClick={run} disabled={search.isPending}>
-            {search.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Search className="mr-1 h-4 w-4" />} Chercher
+            {search.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Search className="mr-1 h-4 w-4" />} Chercher sur IGDB
           </Button>
           {lists.length > 0 && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
