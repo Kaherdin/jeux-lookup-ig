@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
-import { CATEGORIES } from "@/lib/categories";
+import { CATEGORIES, PLATEFORME_BY_KEY } from "@/lib/categories";
 
 // IGDB ids
 const PLATFORMS: [number, string][] = [[6, "PC"], [167, "PS5"], [48, "PS4"], [130, "Switch"], [169, "Xbox Series"], [49, "Xbox One"]];
@@ -31,11 +31,6 @@ export type Criteres = {
   joueursMin: number;
 };
 
-/** « PS5 », « Series X|S »… tels qu'ils sortent d'IGDB → identifiants de plateforme */
-const PLATFORM_IDS: [number, RegExp][] = [
-  [6, /^pc$|windows/i], [167, /ps5|playstation 5/i], [48, /ps4|playstation 4/i],
-  [130, /switch/i], [169, /series/i], [49, /xbox one/i],
-];
 
 export function DiscoverView({ lists, criteres }: { lists: { slug: string; name: string }[]; criteres: Criteres }) {
   const [sinceYear, setSinceYear] = useState("0");
@@ -70,9 +65,10 @@ export function DiscoverView({ lists, criteres }: { lists: { slug: string; name:
       ...(criteres.pvp ? [2] : []),
       ...(criteres.coop ? [3] : []),
     ];
-    const plat = PLATFORM_IDS.find(([, re]) => re.test(criteres.plateforme));
+    // la famille de machines choisie dans le panneau porte ses propres ids IGDB
+    const plat = PLATEFORME_BY_KEY[criteres.plateforme];
     search.execute({
-      platforms: plat ? [plat[0]] : [],
+      platforms: plat?.igdb ?? [],
       genres: [...new Set(picked.flatMap((c) => c.igdbGenres))],
       themes: [...new Set(picked.flatMap((c) => c.igdbThemes))],
       modes,
@@ -86,7 +82,8 @@ export function DiscoverView({ lists, criteres }: { lists: { slug: string; name:
 
   const resume = [
     ...FAMILLES.filter((c) => criteres.familles.includes(c.key)).map((c) => `${c.emoji} ${c.label}`),
-    criteres.plateforme !== "all" ? criteres.plateforme : "",
+    PLATEFORME_BY_KEY[criteres.plateforme]
+      ? `${PLATEFORME_BY_KEY[criteres.plateforme].emoji} ${PLATEFORME_BY_KEY[criteres.plateforme].label}` : "",
     criteres.solo ? "Solo" : "", criteres.coop ? "Coop" : "", criteres.pvp ? "PvP" : "",
     criteres.canape ? "Canapé" : "",
     criteres.noteMin ? `note ${criteres.noteMin}+` : "",

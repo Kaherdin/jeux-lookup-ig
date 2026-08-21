@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getListBySlug, libSlugs } from "@/lib/store";
+import { compterPossessions } from "@/lib/store";
 import { SiteHeader } from "@/components/site-header";
 import { AccountSync } from "@/components/account-sync";
 
@@ -24,14 +24,11 @@ export default async function Page() {
   }
 
   const user = session.user;
-  const { psn, steam } = libSlugs(user.id);
-  const [compte, listePsn, listeSteam] = await Promise.all([
+  const [compte, nPsn, nSteam] = await Promise.all([
     prisma.user.findUnique({ where: { id: user.id }, select: { steamId: true } }),
-    getListBySlug(psn),
-    getListBySlug(steam),
+    compterPossessions(user.id, "psn"),
+    compterPossessions(user.id, "steam"),
   ]);
-  const compter = async (id?: string) => (id ? prisma.listItem.count({ where: { listId: id } }) : 0);
-  const [nPsn, nSteam] = await Promise.all([compter(listePsn?.id), compter(listeSteam?.id)]);
 
   return (
     <>
@@ -42,13 +39,14 @@ export default async function Page() {
 
         <h2 className="mt-8 text-lg font-semibold">Mes bibliothèques</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Les jeux importés ici sont marqués <strong>« J&apos;ai »</strong> partout dans l&apos;app — pratique pour
-          repérer ce qu&apos;il te reste vraiment à acheter.
+          Les jeux importés ici entrent dans le catalogue et sont marqués <strong>« J&apos;ai »</strong> partout
+          dans l&apos;app — pratique pour repérer ce qu&apos;il te reste vraiment à acheter. Ce ne sont pas des
+          listes : c&apos;est un fait attaché à ton compte, filtrable comme n&apos;importe quel critère.
         </p>
 
         <AccountSync
-          steam={{ lie: !!compte?.steamId, jeux: nSteam, slug: listeSteam ? steam : null }}
-          psn={{ jeux: nPsn, slug: listePsn ? psn : null }}
+          steam={{ lie: !!compte?.steamId, jeux: nSteam }}
+          psn={{ jeux: nPsn }}
         />
       </main>
     </>

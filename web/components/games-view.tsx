@@ -16,7 +16,10 @@ import { gameDetail } from "@/app/actions/games";
 import { SelectionBar } from "@/components/selection-bar";
 import { SaveFilterList } from "@/components/save-filter-list";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { CATEGORIES, CATEGORY_BY_KEY, categorize, type CategoryKey } from "@/lib/categories";
+import {
+  CATEGORIES, CATEGORY_BY_KEY, categorize, emojiDeTag,
+  PLATEFORMES, PLATEFORME_BY_KEY, famillesPlateformes, type CategoryKey,
+} from "@/lib/categories";
 import {
   https, prixVal, noteVal, md, TODAY, estRecent, aVenir, estInde, estGrosStudio,
   sortieVal, popuVal, fmtNb, dureeVal, SORT_VAL, SORT_DEFDIR, SORT_LABEL, faireComparateur,
@@ -43,10 +46,10 @@ const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", 
  * Une ligne = une grille, pas un <tr>. Le tableau HTML rendait la virtualisation
  * pénible (largeurs recalculées au fil du défilement) ; en grille, les colonnes sont
  * déclarées une fois pour toutes et on peut positionner les lignes librement.
- * Les colonnes tombent avec la largeur d'écran : 3 sur mobile, 5 dès md, 7 dès lg.
+ * Les colonnes tombent avec la largeur d'écran : 3 sur mobile, 5 dès md, 8 dès lg.
  */
 const GRILLE =
-  "grid grid-cols-[32px_minmax(0,1fr)_88px] gap-2 md:grid-cols-[36px_minmax(0,2fr)_minmax(150px,1fr)_120px_100px] lg:grid-cols-[36px_minmax(0,2fr)_minmax(170px,1fr)_130px_110px_90px_140px]";
+  "grid grid-cols-[32px_minmax(0,1fr)_88px] gap-2 md:grid-cols-[36px_minmax(0,2fr)_minmax(150px,1fr)_120px_100px] lg:grid-cols-[36px_minmax(0,2fr)_minmax(150px,1fr)_130px_104px_80px_72px_136px]";
 /** hauteur approximative d'une ligne, affinée à la mesure */
 const HAUTEUR_LIGNE = 116;
 
@@ -191,7 +194,7 @@ function tokensDe(g: Game): string[] {
 }
 
 /** un jeu + tout ce qui sert à le filtrer, calculé UNE fois pour toute la liste */
-type Indexed = { g: Game; key: string; hay: string; cats: CategoryKey[]; toks: string[] };
+type Indexed = { g: Game; key: string; hay: string; cats: CategoryKey[]; toks: string[]; plats: string[] };
 
 const splitCsv = (s: string | null) => new Set((s ?? "").split(",").filter(Boolean));
 
@@ -297,15 +300,16 @@ export function GamesView({
       hay: `${g.titre} ${g.genre ?? ""} ${g.univers ?? ""}`.toLowerCase(),
       cats: g.cats ?? categorize(g),
       toks: tokensDe(g),
+      plats: famillesPlateformes(g.plateformes),
     })),
     [games]
   );
 
-  const platforms = useMemo(() => {
-    const c = new Map<string, number>();
-    for (const g of games) for (const p of g.plateformes ?? []) c.set(p, (c.get(p) ?? 0) + 1);
-    return [...c.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
-  }, [games]);
+  // familles de machines présentes dans cette liste, dans l'ordre de PLATEFORMES
+  const platList = useMemo(() => {
+    const vus = new Set(index.flatMap((it) => it.plats));
+    return PLATEFORMES.filter((p) => vus.has(p.key));
+  }, [index]);
 
   // familles présentes dans cette liste, les plus fournies d'abord
   const catList = useMemo(() => {
@@ -337,7 +341,10 @@ export function GamesView({
     if (except !== "q" && qq && !it.hay.includes(qq)) return false;
     if (except !== "cat" && cats.size && !it.cats.some((k) => cats.has(k))) return false;
     if (except !== "stag" && sousTags.size && !it.toks.some((t) => sousTags.has(t.toLowerCase()))) return false;
-    if (except !== "plat" && platformFilter !== "all" && !(it.g.plateformes ?? []).includes(platformFilter)) return false;
+    // « p » porte désormais une famille (« playstation ») ; les liens déjà partagés
+    // portent une machine exacte (« PS5 ») — les deux passent, plutôt qu'un lien mort.
+    if (except !== "plat" && platformFilter !== "all"
+      && !it.plats.includes(platformFilter) && !(it.g.plateformes ?? []).includes(platformFilter)) return false;
     for (const k of active) {
       if (k === except) continue;
       const f = findFilter(k);
@@ -377,6 +384,11 @@ export function GamesView({
       let n = 0;
       for (const it of index) if (it.cats.includes(cat.key) && keep(it, "cat")) n++;
       out["cat:" + cat.key] = n;
+    }
+    for (const p of PLATEFORMES) {
+      let n = 0;
+      for (const it of index) if (it.plats.includes(p.key) && keep(it, "plat")) n++;
+      out["plat:" + p.key] = n;
     }
     return out;
   }, [panel, index, keep, owned]);
@@ -560,13 +572,16 @@ export function GamesView({
             <ActiveChip key={k} label={`${CATEGORY_BY_KEY[k]?.emoji ?? ""} ${CATEGORY_BY_KEY[k]?.label ?? k}`} onRemove={() => toggleCat(k)} />
           ))}
           {[...sousTags].map((t) => (
-            <ActiveChip key={t} label={t} onRemove={() => toggleSousTag(t)} />
+            <ActiveChip key={t} label={`${emojiDeTag(t)} ${t}`.trim()} onRemove={() => toggleSousTag(t)} />
           ))}
           {Object.entries(PLAGES).filter(([k]) => !estPleine(k, plages[k])).map(([k, def]) => (
             <ActiveChip key={k} label={`${def.label} ${plages[k][0]}–${plages[k][1]}${def.unite}`}
               onRemove={() => setPlages((p) => ({ ...p, [k]: bornesPleines(k) }))} />
           ))}
-          {platformFilter !== "all" && <ActiveChip label={`Console : ${platformFilter}`} onRemove={() => setPlatformFilter("all")} />}
+          {platformFilter !== "all" && (
+            <ActiveChip onRemove={() => setPlatformFilter("all")}
+              label={`${PLATEFORME_BY_KEY[platformFilter]?.emoji ?? ""} ${PLATEFORME_BY_KEY[platformFilter]?.label ?? platformFilter}`.trim()} />
+          )}
           {[...active].map((k) => (
             <ActiveChip key={k} label={findFilter(k)?.label ?? k} onRemove={() => toggleFilter(k)} />
           ))}
@@ -610,12 +625,14 @@ export function GamesView({
                 <div className="flex flex-wrap gap-1.5">
                   {sousTagsDispo.map((t) => {
                     const on = sousTags.has(t.label.toLowerCase());
+                    // ornement seulement : la clé de filtre reste le libellé en minuscules
+                    const e = emojiDeTag(t.label);
                     return (
                       <button key={t.label} onClick={() => toggleSousTag(t.label)}
                         className={cn("rounded-full border px-2.5 py-1 text-[12px] transition",
                           on ? "border-primary bg-primary/15 font-semibold text-primary"
                             : "border-transparent bg-background text-muted-foreground hover:border-primary")}>
-                        {t.label} <span className="opacity-60">{t.n}</span>
+                        {e && <span className="mr-0.5">{e}</span>}{t.label} <span className="opacity-60">{t.n}</span>
                       </button>
                     );
                   })}
@@ -638,14 +655,18 @@ export function GamesView({
                 </div>
               </Bloc>
             ))}
-            <Bloc titre="Console">
-              <Select value={platformFilter} onValueChange={setPlatformFilter}>
-                <SelectTrigger className="w-[220px]"><SelectValue placeholder="Console" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Toutes les consoles</SelectItem>
-                  {platforms.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-                </SelectContent>
-              </Select>
+            <Bloc titre="Plateforme" aide="Une seule à la fois — reclique dessus pour revoir tout le monde.">
+              <div className="flex flex-wrap gap-2">
+                {platList.map((p) => {
+                  const on = platformFilter === p.key;
+                  return (
+                    <Puce key={p.key} on={on} n={counts["plat:" + p.key] ?? 0}
+                      onClick={() => setPlatformFilter(on ? "all" : p.key)}>
+                      {p.emoji} {p.label}
+                    </Puce>
+                  );
+                })}
+              </div>
             </Bloc>
           </div>
 
@@ -739,6 +760,7 @@ export function GamesView({
             <button className="hidden text-left hover:text-foreground md:block" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</button>
             <button className="text-left hover:text-foreground" onClick={() => changeSort("note")}>Note{arrow("note")}</button>
             <button className="hidden text-left hover:text-foreground lg:block" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</button>
+            <button className="hidden text-left hover:text-foreground lg:block" onClick={() => changeSort("duree")}>Durée{arrow("duree")}</button>
             <button className="hidden text-left hover:text-foreground lg:block" onClick={() => changeSort("sortie")}>Sortie{arrow("sortie")}</button>
           </div>
 
@@ -996,7 +1018,8 @@ const Row = memo(function Row({
           </div>
           <div className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
             {detail && <span>{detail}</span>}
-            {g.dureeVie && <span title="durée de vie approximative">⏱ {g.dureeVie}</span>}
+            {/* sous lg la durée n'a pas de colonne à elle : elle reste dans la ligne de méta */}
+            {g.dureeVie && <span className="lg:hidden" title="durée de vie approximative">⏱ {g.dureeVie}</span>}
             {g.ajouteLe && <span title={`ajouté le ${g.ajouteLe}`}>+ {fmtJour(g.ajouteLe)}</span>}
             {g.urlSteam && <a href={g.urlSteam} target="_blank" rel="noopener noreferrer" className="hover:text-primary hover:underline">Steam ↗</a>}
             {g.urlPsn && <a href={g.urlPsn} target="_blank" rel="noopener noreferrer" className="hover:text-primary hover:underline">PS ↗</a>}
@@ -1039,6 +1062,11 @@ const Row = memo(function Row({
       </div>
 
       <div className="hidden text-sm lg:block">{g.nbJoueurs || <span className="text-muted-foreground">—</span>}</div>
+
+      {/* durée de vie : approximative par nature (« ~12h »), d'où l'infobulle */}
+      <div className="hidden whitespace-nowrap text-sm lg:block" title={g.dureeVie ? "durée de vie approximative" : undefined}>
+        {g.dureeVie || <span className="text-muted-foreground">—</span>}
+      </div>
 
       <div className="hidden text-sm lg:block">
         {txt ? <span className={released ? "font-bold text-emerald-500" : "text-muted-foreground"}>{txt}</span>

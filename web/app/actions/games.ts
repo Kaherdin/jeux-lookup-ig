@@ -2,7 +2,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { authActionClient, openActionClient } from "@/lib/safe-action";
-import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, removeFromList, deleteGameEverywhere, linkGames, invalidateCaches, getGameFull, getListsContaining } from "@/lib/store";
+import { getListBySlug, gameExists, upsertGame, getTitles, getTitresCatalogue, createGames, upsertCatalogue, marquerPossedes, createList, removeFromList, deleteGameEverywhere, linkGames, invalidateCaches, getGameFull, getListsContaining } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
@@ -76,7 +76,7 @@ function revalidate(slug: string) {
 // C'est detectAnything qui choisit la stratégie — l'interface n'a plus rien à deviner.
 // Ouvert aux visiteurs sans compte sur les listes collaboratives.
 export const analyzeInput = openActionClient
-  .inputSchema(z.object({ slug: z.string(), input: z.string().min(1) }))
+  .inputSchema(z.object({ slug: z.string().optional(), input: z.string().min(1) }))
   .action(async ({ parsedInput: { slug, input }, ctx }) => {
     const anon = !ctx.user;
     if (!(await allow(anon ? "anon" : "enrich", ctx.key))) {
@@ -84,12 +84,13 @@ export const analyzeInput = openActionClient
         ? "Limite atteinte pour les visiteurs (5 analyses / 10 min). Crée un compte pour continuer."
         : "Analyse limitée — réessaie dans une minute.");
     }
-    const list = await assertCanAdd(slug, ctx.user);
+    // sans liste cible, on ajoute au catalogue : rien à vérifier côté appartenance
+    const list = slug ? await assertCanAdd(slug, ctx.user) : null;
     // une playlist = jusqu'à 250 vidéos à enrichir : réservé aux comptes
     if (anon && /youtube\.com\/playlist|[?&]list=/i.test(input)) {
       throw new Error("L'import d'une playlist YouTube demande un compte (c'est très gourmand). Colle une vidéo, un titre ou une liste de titres.");
     }
-    const existing = await getTitles(list.id);
+    const existing = list ? await getTitles(list.id) : await getTitresCatalogue();
     const res = await detectAnything(input, env(), existing);
     return {
       games: res.games as PreviewGame[],
@@ -182,7 +183,10 @@ export type DiscoverGame = {
   genres: string;
 };
 
-// importe la bibliothèque PSN (jeux joués) via un token NPSSO → liste dédiée « Ma bibliothèque PlayStation ».
+/**
+ * Importe la bibliothèque PSN via un token NPSSO. Les jeux entrent au CATALOGUE et sont
+ * marqués POSSÉDÉS — plus de liste dédiée : posséder n'est pas une liste, c'est un fait.
+ */
 export const importPsn = authActionClient
   .inputSchema(z.object({ npsso: z.string().min(32) }))
   .action(async ({ parsedInput: { npsso }, ctx }) => {
@@ -194,19 +198,12 @@ export const importPsn = authActionClient
       throw new Error("Token NPSSO invalide ou expiré — récupère-le à nouveau (voir l'aide).");
     }
     if (!lib.length) throw new Error("Aucun jeu trouvé sur ce compte PSN.");
-    // liste dédiée par utilisateur (créée au premier import)
-    const slug = `ps-${ctx.user.id.slice(0, 8).toLowerCase()}`;
-    const existing = await getListBySlug(slug);
-    if (existing?.ownerId && existing.ownerId !== ctx.user.id) throw new Error("Conflit de liste PSN.");
-    const listId = existing?.id ?? (await createList({
-      slug, name: "🎮 Ma bibliothèque PlayStation", isPublic: true, ownerId: ctx.user.id,
-      description: "Jeux joués sur PS4/PS5, importés depuis PSN.",
-    })).id;
     const today = new Date().toISOString().slice(0, 10);
     const rows = lib.map((g) => ({ titre: g.titre, image: g.image, plateformes: [g.plateforme], ajouteLe: today }));
-    const added = await createGames(listId, rows);
-    revalidate(slug);
-    return { added, total: lib.length, slug };
+    const ids = await upsertCatalogue(rows);
+    const added = await marquerPossedes(ctx.user.id, ids, "psn");
+    revalidate("");
+    return { added, total: lib.length };
   });
 
 // rafraîchit la bibliothèque Steam depuis le SteamID déjà mémorisé (via la connexion OpenID).
@@ -220,33 +217,27 @@ export const importSteam = authActionClient
     if (!user?.steamId) throw new Error("Compte Steam non lié — clique d'abord « Se connecter avec Steam ».");
     const lib = await fetchSteamLibrary(user.steamId, apiKey);
     if (!lib.length) throw new Error("Aucun jeu trouvé — vérifie que ton profil Steam (détails du jeu) est public.");
-    const slug = `steam-${ctx.user.id.slice(0, 8).toLowerCase()}`;
-    const existing = await getListBySlug(slug);
-    if (existing?.ownerId && existing.ownerId !== ctx.user.id) throw new Error("Conflit de liste Steam.");
-    const listId = existing?.id ?? (await createList({
-      slug, name: "🎮 Ma bibliothèque Steam", isPublic: true, ownerId: ctx.user.id,
-      description: "Jeux possédés sur Steam.",
-    })).id;
     const today = new Date().toISOString().slice(0, 10);
     const rows = lib.map((g) => ({ titre: g.titre, image: g.image, plateformes: [g.plateforme], steamAppId: g.steamAppId, ajouteLe: today }));
-    const added = await createGames(listId, rows);
-    revalidate(slug);
-    return { added, total: lib.length, slug };
+    const ids = await upsertCatalogue(rows);
+    const added = await marquerPossedes(ctx.user.id, ids, "steam");
+    revalidate("");
+    return { added, total: lib.length };
   });
 
 // reçoit les jeux DÉJÀ enrichis (depuis la preview) → enregistre directement
 export const addBatch = openActionClient
   .inputSchema(
     z.object({
-      slug: z.string(),
+      slug: z.string().optional(),
       items: z.array(z.object({ titre: z.string() }).passthrough()),
     })
   )
   .action(async ({ parsedInput: { slug, items }, ctx }) => {
     if (!(await allow(ctx.user ? "enrich" : "anon", ctx.key))) throw new Error("Ajout limité — réessaie dans quelques minutes.");
-    const list = await assertCanAdd(slug, ctx.user);
-    const added = await createGames(list.id, items as Array<Record<string, unknown> & { titre: string }>);
-    revalidate(slug);
+    const list = slug ? await assertCanAdd(slug, ctx.user) : null;
+    const added = await createGames(list?.id ?? null, items as Array<Record<string, unknown> & { titre: string }>);
+    revalidate(slug ?? "");
     return { added, titres: items.map((it) => it.titre) };
   });
 

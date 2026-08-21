@@ -16,7 +16,10 @@ export function invalidateCaches() {
   revalidateTag(TAGS.lists);
 }
 
-export const DEFAULT_LIST_SLUG = "decouvertes";
+/**
+ * Il n'y a plus de « liste par défaut » : un jeu ajouté entre au CATALOGUE, point.
+ * Les listes ne sont que des vues posées dessus.
+ */
 
 export type GameInput = Record<string, unknown> & { titre: string };
 
@@ -66,10 +69,6 @@ export async function getListBySlug(slug: string) {
   });
 }
 
-export async function getDefaultList() {
-  return prisma.list.findUnique({ where: { slug: DEFAULT_LIST_SLUG } });
-}
-
 /** Slugs des listes-bibliothèques générées pour un utilisateur (import PSN / Steam). */
 export function libSlugs(userId: string) {
   const k = userId.slice(0, 8).toLowerCase();
@@ -84,12 +83,31 @@ export const getOwnedTitles = (userId: string) =>
   unstable_cache(() => ownedTitlesQuery(userId), ["ownedTitles", userId], { tags: [TAGS.games], revalidate: 300 })();
 
 async function ownedTitlesQuery(userId: string): Promise<string[]> {
-  const { psn, steam } = libSlugs(userId);
-  const rows = await prisma.listItem.findMany({
-    where: { list: { ownerId: userId, slug: { in: [psn, steam] } } },
+  const rows = await prisma.ownership.findMany({
+    where: { userId },
     select: { game: { select: { titre: true } } },
   });
   return rows.map((r) => r.game.titre);
+}
+
+/** Marque des jeux comme possédés par un utilisateur, sans écraser les autres sources. */
+export async function marquerPossedes(userId: string, gameIds: string[], source: "psn" | "steam") {
+  let n = 0;
+  for (const gameId of gameIds) {
+    const actuel = await prisma.ownership.findUnique({ where: { userId_gameId: { userId, gameId } } });
+    const sources = [...new Set([...(actuel?.sources ?? []), source])];
+    await prisma.ownership.upsert({
+      where: { userId_gameId: { userId, gameId } },
+      create: { userId, gameId, sources },
+      update: { sources },
+    });
+    if (!actuel) n++;
+  }
+  return n;
+}
+
+export async function compterPossessions(userId: string, source?: "psn" | "steam") {
+  return prisma.ownership.count({ where: { userId, ...(source ? { sources: { has: source } } : {}) } });
 }
 
 /** Toutes les listes visibles par quelqu'un : les publiques + les siennes. */
@@ -213,6 +231,12 @@ export async function getGameByTitre(titre: string) {
   return prisma.game.findUnique({ where: { cle: cleDe(titre) } });
 }
 
+/** tous les titres du catalogue — sert à marquer les doublons quand on ajoute sans liste */
+export async function getTitresCatalogue() {
+  const rows = await prisma.game.findMany({ select: { titre: true } });
+  return rows.map((r) => r.titre);
+}
+
 /** titres déjà présents dans une liste — sert à marquer les doublons dans la preview */
 export async function getTitles(listId: string) {
   const rows = await prisma.listItem.findMany({
@@ -275,7 +299,19 @@ export async function linkGames(listId: string, gameIds: string[]) {
  * Ajoute des jeux enrichis : chacun entre au catalogue (ou y met à jour sa fiche),
  * puis est rattaché à la liste. Renvoie le nombre de jeux NOUVEAUX dans cette liste.
  */
-export async function createGames(listId: string, list: GameInput[]) {
+/** Verse des jeux au catalogue (création ou mise à jour) et renvoie leurs identifiants. */
+export async function upsertCatalogue(list: GameInput[]): Promise<string[]> {
+  const parCle = new Map(list.filter((g) => g.titre).map((g) => [cleDe(g.titre), g]));
+  const ids: string[] = [];
+  for (const [cle, g] of parCle) {
+    const data = { ...toRow(g), cle };
+    const jeu = await prisma.game.upsert({ where: { cle }, create: data, update: data });
+    ids.push(jeu.id);
+  }
+  return ids;
+}
+
+export async function createGames(listId: string | null, list: GameInput[]) {
   const valides = list.filter((g) => g.titre);
   if (!valides.length) return 0;
   // dédoublonne l'entrée elle-même : deux lignes du même jeu dans un même lot
@@ -286,5 +322,6 @@ export async function createGames(listId: string, list: GameInput[]) {
     const jeu = await prisma.game.upsert({ where: { cle }, create: data, update: data });
     ids.push(jeu.id);
   }
-  return linkGames(listId, ids);
+  // sans liste cible, les jeux entrent au catalogue et c'est tout
+  return listId ? linkGames(listId, ids) : ids.length;
 }

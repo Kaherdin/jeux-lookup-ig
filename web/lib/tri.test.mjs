@@ -4,7 +4,7 @@
 // filtrée, et la fenêtre rendue par la virtualisation n'est qu'une tranche de cet
 // ordre global — jamais un tri par page.
 // Vérifie que le tri porte sur la TOTALITÉ de la liste filtrée, jamais sur une page.
-import { faireComparateur, SORT_LABEL, SORT_DEFDIR, estRecent, sortieVal } from './tri.ts';
+import { faireComparateur, SORT_LABEL, SORT_DEFDIR, estRecent, sortieVal, dureeVal } from './tri.ts';
 
 const GENRES = ['Action-RPG', 'Survie', 'Extraction (PvP)', 'Party', 'Puzzle, Simulator',
   'Racing, Sport', 'Horreur', 'Role-playing (RPG), Adventure', '?', 'Roguelite'];
@@ -88,6 +88,18 @@ const parSousType = [...filtres].sort(cmpST);
 const toks = parSousType.map((t) => (t.toks[0] ?? '').toLowerCase());
 verifier('sous-type : ordre alphabétique', toks.every((t, i) => i === 0 || toks[i - 1] <= t));
 console.log(`  tri « sous-type » → ${[...new Set(toks)].slice(0, 6).join(', ')}…\n`);
+
+// 7. cas concret : tri par durée de vie, dans son sens par défaut (les plus longs d'abord)
+const cmpD = faireComparateur({ sortKey: 'duree', sortDir: SORT_DEFDIR.duree, epingler: false, parSousType: false });
+const parDuree = [...filtres].sort(cmpD);
+const heures = parDuree.map((t) => dureeVal(t.g));
+verifier('durée desc : heures décroissantes de bout en bout',
+  heures.every((v, i) => i === 0 || heures[i - 1] >= v));
+// une durée inconnue vaut -1 : dans le sens par défaut elle finit EN BAS, jamais en tête
+const sansDuree = heures.filter((v) => v < 0).length;
+verifier('durée desc : les inconnues sont groupées en fin de liste',
+  sansDuree === 0 || heures.slice(-sansDuree).every((v) => v < 0));
+console.log(`  tri « durée » desc → ${heures[0]}h … ${heures[Math.floor(heures.length / 2)]}h, puis ${sansDuree} sans durée connue\n`);
 
 console.log(echecs === 0
   ? `✅ TOUT PASSE — ${Object.keys(SORT_LABEL).length} critères × 2 sens × 2 modes, sur ${filtres.length} jeux`

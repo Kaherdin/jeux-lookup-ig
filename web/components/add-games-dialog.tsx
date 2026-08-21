@@ -17,7 +17,8 @@ import { cn } from "@/lib/utils";
 const PLACEHOLDER =
   "Colle n'importe quoi : un lien YouTube (même un « Top 10 »), une playlist, un lien Steam / PlayStation / Instagram / Nintendo, un titre, une liste de titres (un par ligne), ou un texte entier…";
 
-export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React.ReactNode }) {
+/** `slug` absent = on ajoute au CATALOGUE, sans rattacher à une liste. */
+export function AddGamesDialog({ slug, trigger }: { slug?: string; trigger: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
 
@@ -29,19 +30,19 @@ export function AddGamesDialog({ slug, trigger }: { slug: string; trigger: React
 
   const psn = useAction(importPsn, {
     onSuccess: ({ data }) => {
-      toast.success(`${data?.added ?? 0} jeu(x) importés (sur ${data?.total ?? 0}) → « Ma bibliothèque PlayStation ». Rescanne pour enrichir.`);
+      toast.success(`${data?.added ?? 0} nouveau(x) jeu(x) sur ${data?.total ?? 0} — marqués « je l'ai » (PlayStation).`);
       setNpsso("");
       setOpen(false);
-      if (data?.slug) router.push(`/l/${data.slug}`); else router.refresh();
+      router.refresh();
     },
     onError: ({ error }) => toast.error(error.serverError ?? "Échec de l'import PSN."),
   });
 
   const steam = useAction(importSteam, {
     onSuccess: ({ data }) => {
-      toast.success(`${data?.added ?? 0} jeu(x) importés (sur ${data?.total ?? 0}) → « Ma bibliothèque Steam ». Rescanne pour enrichir.`);
+      toast.success(`${data?.added ?? 0} nouveau(x) jeu(x) sur ${data?.total ?? 0} — marqués « je l'ai » (Steam).`);
       setOpen(false);
-      if (data?.slug) router.push(`/l/${data.slug}`); else router.refresh();
+      router.refresh();
     },
     onError: ({ error }) => toast.error(error.serverError ?? "Échec du rafraîchissement Steam."),
   });

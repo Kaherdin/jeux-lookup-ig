@@ -155,3 +155,129 @@ export function categorize(input?: Categorisable | string | null): CategoryKey[]
   const out = CATEGORIES.filter((c) => hit.has(c.key)).map((c) => c.key);
   return out.length ? out : ["autre"];
 }
+
+/**
+ * Emojis des sous-types — les « nuances » proposées sous les familles. Ces étiquettes
+ * arrivent brutes d'IGDB et de Steam, en anglais comme en français et sans aucune
+ * normalisation (« Role-playing », « Hack and slash », « Beat 'em up », « Indépendant »).
+ *
+ * La liste est OUVERTE : elle dépend des données du catalogue, pas d'une énumération
+ * qu'on maîtrise. L'absence d'emoji est donc le cas NORMAL — la puce s'affiche alors
+ * avec son seul libellé, sans trou ni symbole de remplacement.
+ *
+ * Quand un sous-type recouvre exactement une famille (Action, Aventure, Horreur…), il
+ * en reprend l'emoji : deux symboles pour une même idée, à deux lignes d'écart, se
+ * liraient comme deux choses différentes.
+ */
+const EMOJI_TAG: Record<string, string> = {
+  // genres IGDB / Steam, en anglais et en français
+  "action": "💥", "aventure": "🗺️", "adventure": "🗺️", "exploration": "🧭",
+  "rpg": "⚔️", "role-playing": "⚔️", "role playing": "⚔️", "action-rpg": "⚔️", "jeu de role": "⚔️",
+  "shooter": "🔫", "fps": "🔫", "tir": "🔫", "tps": "🔫",
+  "hack and slash": "🗡️", "beat 'em up": "👊", "fighting": "🥊", "combat": "🥊",
+  "puzzle": "🧠", "reflexion": "🧠", "point-and-click": "👆", "point and click": "👆",
+  "strategy": "♟️", "strategie": "♟️", "tactical": "🎯", "tactique": "🎯",
+  "simulator": "🎛️", "simulation": "🎛️", "gestion": "📈", "management": "📈",
+  "racing": "🏁", "course": "🏁", "sport": "⚽", "sports": "⚽",
+  "platform": "🧗", "plateforme": "🧗", "arcade": "🕹️", "pinball": "🎱",
+  "music": "🎵", "musique": "🎵", "rythme": "🎵",
+  "indie": "🎨", "independant": "🎨", "inde": "🎨",
+  "visual novel": "📖", "card & board game": "🃏", "cartes": "🃏", "plateau": "🃏",
+  "quiz": "❓", "trivia": "❓", "moba": "🛡️", "mmo": "🌐", "massivement multijoueur": "🌐",
+  // thèmes IGDB
+  "fantasy": "🐉", "fantastique": "🐉", "science fiction": "🚀", "sci-fi": "🚀",
+  "horror": "😱", "horreur": "😱", "thriller": "🔦", "drama": "🎭", "mystery": "🔍",
+  "survival": "🏕️", "survie": "🏕️", "sandbox": "🧱", "open world": "🌍", "monde ouvert": "🌍",
+  "comedy": "😂", "comedie": "😂", "historical": "🏛️", "historique": "🏛️",
+  "warfare": "🎖️", "guerre": "🎖️", "stealth": "🥷", "infiltration": "🥷",
+  "business": "💼", "kids": "🧒", "educational": "🎓", "romance": "💘",
+  "party": "🎉", "4x": "👑", "non-fiction": "📚", "erotic": "🔞",
+  // étiquettes libres fréquentes (LLM, Steam)
+  "roguelite": "🔁", "roguelike": "🔁", "metroidvania": "🗝️", "extraction": "🎒",
+  "casual": "☕", "decontracte": "☕", "cozy": "🫖", "pixel graphics": "👾",
+  "anime": "🎌", "craft": "🔨", "construction": "🔨", "multijoueur": "👥", "coop": "🤝", "solo": "🎯",
+  "free to play": "🆓", "gratuit": "🆓", "early access": "🚧", "acces anticipe": "🚧",
+};
+
+/**
+ * Repli quand l'étiquette n'est pas dans la table : les mêmes familles de mots que
+ * `CATEGORIES.re`, mais rendues une par une. L'ordre compte — « Action-RPG » doit
+ * tomber sur RPG avant de tomber sur Action.
+ */
+const EMOJI_MOTIFS: [RegExp, string][] = [
+  [/roguel(ite|ike)/, "🔁"], [/metroidvania/, "🗝️"], [/souls/, "🩸"],
+  [/battle.?royale/, "🪂"], [/tower.?defense/, "🗼"], [/city.?build/, "🏙️"],
+  [/farm|agricult|ferme/, "🌾"], [/cuisine|cooking/, "🍳"], [/zombie/, "🧟"],
+  [/\bmmo/, "🌐"], [/hack.?.?slash/, "🗡️"], [/beat.?.?em.?.?up/, "👊"],
+  [/\brpg\b|role.?playing|jeu de role/, "⚔️"], [/shoot|\bfps\b|\btps\b|\btir\b/, "🔫"],
+  [/puzzle|reflexion|casse.?tete/, "🧠"], [/tactic|tactiq/, "🎯"], [/strateg/, "♟️"],
+  [/simul/, "🎛️"], [/gestion|manage|tycoon/, "📈"],
+  [/course|racing|rally|conduite|driving/, "🏁"], [/sport/, "⚽"],
+  [/horreur|horror|epouvante/, "😱"], [/surviv|survie/, "🏕️"],
+  [/plateforme|platform/, "🧗"], [/aventur|adventur/, "🗺️"],
+  [/fantasy|fantastique|medieval/, "🐉"], [/science.?fiction|sci.?fi|cyberpunk|espace|\bspace/, "🚀"],
+  [/open.?world|monde ouvert/, "🌍"], [/sandbox|bac a sable/, "🧱"],
+  [/comedie|comedy|humour/, "😂"], [/histor/, "🏛️"], [/warfare|guerre|militaire/, "🎖️"],
+  [/stealth|infiltration/, "🥷"], [/mystere|mystery|enquete|detective/, "🔍"],
+  [/party/, "🎉"], [/casual|decontracte|cozy/, "☕"], [/musique|music|rythme|rhythm/, "🎵"],
+  [/arcade/, "🕹️"], [/combat|fighting|baston/, "🥊"], [/cartes|\bcards?\b|plateau|\bboard\b/, "🃏"],
+  [/visual novel|narrat/, "📖"], [/anime|manga/, "🎌"], [/craft|construction|build/, "🔨"],
+  [/multijoueur|multiplayer/, "👥"], [/gratuit|free.?to.?play/, "🆓"],
+  [/acces anticipe|early.?access/, "🚧"], [/\baction/, "💥"], [/indie|independ/, "🎨"],
+];
+
+/**
+ * Emoji d'un sous-type, ou chaîne vide si on n'en connaît pas.
+ *
+ * Ne sert QU'À L'AFFICHAGE : la clé de filtre reste le libellé en minuscules, c'est
+ * elle qui part dans le paramètre d'URL « st » — un emoji qui s'y glisserait casserait
+ * les liens de filtres déjà partagés.
+ */
+export function emojiDeTag(label: string): string {
+  const k = normalize(label).replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+  if (!k) return "";
+  if (EMOJI_TAG[k]) return EMOJI_TAG[k];
+  for (const [re, emoji] of EMOJI_MOTIFS) if (re.test(k)) return emoji;
+  return "";
+}
+
+/**
+ * Familles de plateformes — la même idée que les familles de jeux, appliquée aux
+ * machines. Le catalogue en compte une quarantaine de valeurs brutes (PS4, XONE,
+ * Series X|S, Switch 2, Vita, FireTV, neogeoaes, Ouya, DOS…) : une liste déroulante
+ * de quarante lignes ne se lit pas, et personne ne filtre sur « NGage ».
+ *
+ * On n'expose donc que les six familles qui portent réellement le catalogue. Les
+ * machines rares restent visibles sur la fiche du jeu, simplement elles ne sont pas
+ * un critère de filtre.
+ *
+ * `igdb` sert à la page « Découvrir » : les ids des machines COURANTES de la famille,
+ * pas tout son historique — chercher un jeu PlayStation ne doit pas remonter la PS2.
+ */
+export type Plateforme = { key: string; label: string; emoji: string; re: RegExp; igdb: number[] };
+
+export const PLATEFORMES: Plateforme[] = [
+  { key: "pc", label: "PC / Steam", emoji: "💻", re: /^(pc|mac|linux|dos|browser|steam|windows)/, igdb: [6] },
+  { key: "playstation", label: "PlayStation", emoji: "🎮", re: /^(ps\d|psp|psvr|vita|playstation)/, igdb: [167, 48] },
+  { key: "xbox", label: "Xbox", emoji: "🟩", re: /^(xbox|xone|series|x360)/, igdb: [169, 49] },
+  { key: "nintendo", label: "Nintendo", emoji: "🍄", re: /^(switch|wii|3ds|new 3ds|s?nes|n64|gamecube|game ?boy|gba)/, igdb: [130] },
+  { key: "android", label: "Android", emoji: "🤖", re: /^(android|fire ?tv|ouya|gear vr)/, igdb: [34] },
+  { key: "ios", label: "iOS", emoji: "🍏", re: /^(ios|ipad|iphone)/, igdb: [39] },
+];
+
+export const PLATEFORME_BY_KEY: Record<string, Plateforme> = Object.fromEntries(
+  PLATEFORMES.map((p) => [p.key, p])
+);
+
+/**
+ * Familles de machines d'un jeu, dans l'ordre de PLATEFORMES. Un jeu multiplateforme
+ * en touche plusieurs ; un jeu Stadia-seulement n'en touche aucune, et c'est voulu.
+ */
+export function famillesPlateformes(plateformes?: string[] | null): string[] {
+  const hit = new Set<string>();
+  for (const brut of plateformes ?? []) {
+    const p = normalize(brut).trim();
+    for (const f of PLATEFORMES) if (f.re.test(p)) hit.add(f.key);
+  }
+  return PLATEFORMES.filter((f) => hit.has(f.key)).map((f) => f.key);
+}

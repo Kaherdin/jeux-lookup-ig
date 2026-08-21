@@ -19,9 +19,10 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  sessions Session[]
-  accounts Account[]
-  lists    List[]
+  sessions   Session[]
+  accounts   Account[]
+  lists      List[]
+  ownerships Ownership[]
 
   @@map("user")
 }
@@ -92,7 +93,22 @@ model List {
   @@map("list")
 }
 
-/// Appartenance d'un jeu du catalogue à une liste. Une référence, jamais une copie.
+/// Ce qu'un utilisateur POSSEDE deja, alimente par les imports Steam / PlayStation.
+/// Remplace les anciennes listes-bibliotheques : posseder n'est pas une liste, c'est un fait.
+model Ownership {
+  userId  String
+  gameId  String
+  sources String[] // "psn" | "steam"
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game    Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  majLe   DateTime @default(now())
+
+  @@id([userId, gameId])
+  @@index([gameId])
+  @@map("ownership")
+}
+
+/// Appartenance d'un jeu du catalogue a une liste. Une reference, jamais une copie.
 model ListItem {
   listId   String
   gameId   String
@@ -110,6 +126,7 @@ model Game {
   /// titre normalisé : un jeu n'existe qu'une fois dans le catalogue
   cle            String   @unique
   items          ListItem[]
+  ownerships     Ownership[]
   titre          String
   igdbId         String?
   steamAppId     String?

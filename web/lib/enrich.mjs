@@ -963,7 +963,10 @@ export async function igdbDiscover(criteria, env, limit = 30) {
   const w = ["game_type = 0", "parent_game = null", "version_parent = null"]; // jeux principaux (pas DLC/éditions)
   const ids = (a) => (Array.isArray(a) ? a.filter((x) => Number.isFinite(+x)).map(Number) : []);
   const plats = ids(c.platforms), genres = ids(c.genres), modes = ids(c.modes), themes = ids(c.themes);
-  if (plats.length) w.push(`platforms = (${plats.join(",")})`);
+  // plusieurs machines = « l'une OU l'autre » : côté IGDB, « platforms = (167,48) » se
+  // lit comme un ET et ne remonterait que les jeux sortis sur les deux à la fois.
+  if (plats.length === 1) w.push(`platforms = (${plats[0]})`);
+  else if (plats.length) w.push(`(${plats.map((p) => `platforms = (${p})`).join(" | ")})`);
   // une famille de jeux (« Horreur », « Survie ») se lit tantôt dans les genres,
   // tantôt dans les thèmes IGDB : on accepte l'un OU l'autre.
   if (genres.length && themes.length) w.push(`(genres = (${genres.join(",")}) | themes = (${themes.join(",")}))`);

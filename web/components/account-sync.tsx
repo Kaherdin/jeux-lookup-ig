@@ -9,7 +9,7 @@ import { importPsn, importSteam } from "@/app/actions/games";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-type Etat = { jeux: number; slug: string | null };
+type Etat = { jeux: number };
 
 export function AccountSync({
   steam, psn,
@@ -36,7 +36,7 @@ export function AccountSync({
   return (
     <div className="mt-4 space-y-4">
       {/* ── Steam ─────────────────────────────────────────────────── */}
-      <Carte titre="Steam" etat={steam.lie ? `Lié · ${steam.jeux} jeux` : "Non lié"} ok={steam.lie} slug={steam.slug}>
+      <Carte titre="Steam" etat={steam.lie ? `Lié · ${steam.jeux} jeux` : "Non lié"} ok={steam.lie}>
         <p className="text-sm text-muted-foreground">
           Connexion via Steam (OpenID) — aucun mot de passe ne transite par l&apos;app. Ton profil doit être
           <strong> public</strong> : Steam → Profil → Modifier le profil → Confidentialité → « Détails du jeu » = Public.
@@ -54,7 +54,7 @@ export function AccountSync({
       </Carte>
 
       {/* ── PlayStation ───────────────────────────────────────────── */}
-      <Carte titre="PlayStation" etat={psn.jeux ? `Lié · ${psn.jeux} jeux` : "Non lié"} ok={!!psn.jeux} slug={psn.slug}>
+      <Carte titre="PlayStation" etat={psn.jeux ? `Lié · ${psn.jeux} jeux` : "Non lié"} ok={!!psn.jeux}>
         <p className="text-sm text-muted-foreground">
           Sony n&apos;offre pas de connexion officielle : on passe par un jeton <code className="rounded bg-muted px-1">NPSSO</code>,
           à recoller tous les ~2 mois.
@@ -73,7 +73,7 @@ export function AccountSync({
       </Carte>
 
       {/* ── Nintendo ──────────────────────────────────────────────── */}
-      <Carte titre="Nintendo" etat="Impossible" ok={false} slug={null}>
+      <Carte titre="Nintendo" etat="Impossible" ok={false}>
         <p className="text-sm text-muted-foreground">
           Nintendo n&apos;expose <strong>aucune API</strong> permettant de lister les jeux d&apos;un compte, ni officielle
           ni tolérée — il n&apos;y a rien à brancher, et ça ne dépend pas de nous. En attendant, le plus simple est
@@ -86,8 +86,8 @@ export function AccountSync({
 }
 
 function Carte({
-  titre, etat, ok, slug, children,
-}: { titre: string; etat: string; ok: boolean; slug: string | null; children: React.ReactNode }) {
+  titre, etat, ok, children,
+}: { titre: string; etat: string; ok: boolean; children: React.ReactNode }) {
   return (
     <section className="space-y-3 rounded-xl border p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -97,8 +97,8 @@ function Carte({
           : "rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"}>
           {ok && <Check className="h-3 w-3" />}{etat}
         </span>
-        {slug && (
-          <Link href={`/l/${slug}`} className="ml-auto text-sm text-primary hover:underline">Voir la liste</Link>
+        {ok && (
+          <Link href="/?f=possede" className="ml-auto text-sm text-primary hover:underline">Voir ces jeux</Link>
         )}
       </div>
       {children}

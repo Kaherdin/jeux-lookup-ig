@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { getSession } from "@/lib/session";
-import { getCatalogue, getGamesByLists, getUserLists, getVisibleLists, getOwnedTitles, DEFAULT_LIST_SLUG } from "@/lib/store";
+import { getCatalogue, getGamesByLists, getUserLists, getVisibleLists, getOwnedTitles } from "@/lib/store";
 import { SiteHeader } from "./site-header";
 import { GamesView } from "./games-view";
 import { AddGamesDialog } from "./add-games-dialog";
@@ -56,7 +56,7 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
             <h1 className="text-2xl font-bold tracking-tight">{titre}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{sousTitre}</p>
           </div>
-          <AddGamesDialog slug={DEFAULT_LIST_SLUG} trigger={
+          <AddGamesDialog trigger={
             <Button size="lg" className="shrink-0 gap-2 px-6 text-base font-bold shadow-lg shadow-primary/30 transition hover:-translate-y-0.5">
               <Plus className="h-5 w-5" /> Ajouter des jeux
             </Button>
@@ -73,7 +73,7 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
         />
       </main>
       <div className="fixed bottom-5 right-5 z-30 sm:hidden">
-        <AddGamesDialog slug={DEFAULT_LIST_SLUG} trigger={
+        <AddGamesDialog trigger={
           <Button size="lg" className="h-14 w-14 rounded-full p-0 shadow-xl shadow-primary/40" aria-label="Ajouter des jeux">
             <Plus className="h-6 w-6" />
           </Button>
