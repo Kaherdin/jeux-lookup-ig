@@ -30,7 +30,7 @@ export default async function Page() {
     getListBySlug(psn),
     getListBySlug(steam),
   ]);
-  const compter = async (id?: string) => (id ? prisma.game.count({ where: { listId: id } }) : 0);
+  const compter = async (id?: string) => (id ? prisma.listItem.count({ where: { listId: id } }) : 0);
   const [nPsn, nSteam] = await Promise.all([compter(listePsn?.id), compter(listeSteam?.id)]);
 
   return (

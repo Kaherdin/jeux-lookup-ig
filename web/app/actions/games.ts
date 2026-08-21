@@ -2,7 +2,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { authActionClient, openActionClient } from "@/lib/safe-action";
-import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, deleteGame, invalidateCaches, getGameFull, getListsContaining } from "@/lib/store";
+import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, removeFromList, deleteGameEverywhere, linkGames, invalidateCaches, getGameFull, getListsContaining } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
@@ -101,30 +101,33 @@ export const analyzeInput = openActionClient
   });
 
 /**
- * Copie des jeux déjà en base vers une autre liste (sélection multiple).
- * Le modèle stocke un enregistrement PAR liste : « ajouter à une liste » recopie donc
- * la fiche, déjà enrichie — aucun appel API, c'est instantané.
+ * Rattache des jeux du catalogue à une liste (sélection multiple).
+ * Rien n'est recopié : on ajoute une référence. La fiche reste unique, donc un rescan
+ * profite à toutes les listes qui la citent.
  */
 export const copyToList = openActionClient
   .inputSchema(z.object({ ids: z.array(z.string()).min(1).max(300), toSlug: z.string() }))
   .action(async ({ parsedInput: { ids, toSlug }, ctx }) => {
     const target = await assertCanAdd(toSlug, ctx.user);
-    const rows = await prisma.game.findMany({ where: { id: { in: ids } } });
-    if (!rows.length) throw new Error("Aucun jeu à copier.");
-    const added = await createGames(target.id, rows as unknown as Array<Record<string, unknown> & { titre: string }>);
+    const rows = await prisma.game.findMany({ where: { id: { in: ids } }, select: { id: true } });
+    if (!rows.length) throw new Error("Aucun jeu à ajouter.");
+    const added = await linkGames(target.id, rows.map((r) => r.id));
     revalidate(toSlug);
     return { added, total: rows.length, slug: target.slug, name: target.name };
   });
 
-// supprime un jeu d'une liste (compte requis, même sur une liste collaborative)
+/**
+ * Retire un jeu d'une liste (défaut) — la fiche reste au catalogue et dans les autres
+ * listes. `partout: true` la supprime du catalogue, donc de toutes les listes.
+ */
 export const deleteGameAction = openActionClient
-  .inputSchema(z.object({ slug: z.string(), id: z.string() }))
-  .action(async ({ parsedInput: { slug, id }, ctx }) => {
+  .inputSchema(z.object({ slug: z.string(), id: z.string(), partout: z.boolean().optional() }))
+  .action(async ({ parsedInput: { slug, id, partout }, ctx }) => {
     const list = await assertCanManage(slug, ctx.user);
-    const ok = await deleteGame(list.id, id);
+    const ok = partout ? await deleteGameEverywhere(id) : await removeFromList(list.id, id);
     if (!ok) throw new Error("Jeu introuvable dans cette liste.");
     revalidate(slug);
-    return { deleted: true };
+    return { deleted: true, partout: !!partout };
   });
 
 // moteur de découverte IGDB (filtres plateforme / genre / mode / coop local / joueurs / note)
@@ -165,7 +168,7 @@ export const gameDetail = openActionClient
   .action(async ({ parsedInput: { id }, ctx }) => {
     const g = await getGameFull(id);
     if (!g) throw new Error("Jeu introuvable.");
-    const listes = await getListsContaining(g.titre, ctx.user?.id);
+    const listes = await getListsContaining(g.id, ctx.user?.id);
     return { game: g, listes };
   });
 
@@ -257,7 +260,7 @@ export const rescanGame = authActionClient
   .action(async ({ parsedInput: { slug, titre }, ctx }) => {
     if (!(await allow("enrich", `u:${ctx.user.id}`))) throw new Error("Rescan limité — réessaie dans une minute.");
     const list = await assertCanManage(slug, ctx.user);
-    const existing = await prisma.game.findFirst({ where: { listId: list.id, titre } });
+    const existing = await prisma.game.findFirst({ where: { titre, items: { some: { listId: list.id } } } });
     if (!existing) throw new Error("Jeu introuvable.");
     const enriched = await enrichGame(rescanRec(existing), env());
     await upsertGame(list.id, enriched);
@@ -270,7 +273,7 @@ export const rescanList = authActionClient
   .action(async ({ parsedInput: { slug }, ctx }) => {
     if (!(await allow("heavy", `u:${ctx.user.id}`))) throw new Error("Rescan de liste limité — réessaie dans quelques minutes.");
     const list = await assertCanManage(slug, ctx.user);
-    const games = await prisma.game.findMany({ where: { listId: list.id } });
+    const games = await prisma.game.findMany({ where: { items: { some: { listId: list.id } } } });
     let n = 0;
     const CONC = 4;
     for (let i = 0; i < games.length; i += CONC) {

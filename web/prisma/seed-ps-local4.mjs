@@ -20,6 +20,7 @@ import { PrismaClient } from "@prisma/client";
 import Anthropic from "@anthropic-ai/sdk";
 import { enrichGame } from "../lib/enrich.mjs";
 import { toRow } from "../lib/game-row.mjs";
+import { upsertGames } from "./catalogue.mjs";
 
 const ARGS = process.argv.slice(2);
 const DRY = ARGS.includes("--dry");
@@ -475,11 +476,7 @@ async function main() {
       if (r.ps5) pl.add("PS5");
       g.plateformes = [...pl];
       try {
-        await prisma.game.upsert({
-          where: { listId_titre: { listId: list.id, titre: g.titre } },
-          create: { ...toRow(g), listId: list.id },
-          update: { ...toRow(g), listId: list.id },
-        });
+        await upsertGames(prisma, list.id, [g]);
         ok++;
       } catch { fail++; }
     }));
@@ -488,10 +485,11 @@ async function main() {
   // purge : le script fait autorité sur le contenu de SA liste — on retire ce qui a été
   // écarté depuis (DLC, faux positifs corrigés), sinon les anciennes passes restent en base.
   const gardes = new Set(final.map((r) => r.titre));
-  const enTrop = (await prisma.game.findMany({ where: { listId: list.id }, select: { id: true, titre: true } }))
+  const enTrop = (await prisma.game.findMany({ where: { items: { some: { listId: list.id } } }, select: { id: true, titre: true } }))
     .filter((g) => !gardes.has(g.titre));
   if (enTrop.length) {
-    await prisma.game.deleteMany({ where: { id: { in: enTrop.map((g) => g.id) } } });
+    // on retire l'APPARTENANCE, pas la fiche : le jeu peut vivre dans d'autres listes
+    await prisma.listItem.deleteMany({ where: { listId: list.id, gameId: { in: enTrop.map((g) => g.id) } } });
     console.log(`\n  ${enTrop.length} entrée(s) obsolète(s) retirée(s) : ${enTrop.slice(0, 8).map((g) => g.titre).join(", ")}${enTrop.length > 8 ? "…" : ""}`);
   }
   console.log(`\n${ok} jeux écrits dans /l/${SLUG} · ${fail} échecs`);

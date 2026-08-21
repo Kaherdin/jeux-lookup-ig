@@ -82,7 +82,9 @@ model List {
   isPublic    Boolean  @default(true)
   ownerId     String? // null = liste communautaire
   owner       User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
-  games       Game[]
+  /// liste-filtre : critères enregistrés (« f=coop,canape&p=PS5 »). Null = liste manuelle.
+  filtre      String?
+  items       ListItem[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -90,10 +92,24 @@ model List {
   @@map("list")
 }
 
+/// Appartenance d'un jeu du catalogue à une liste. Une référence, jamais une copie.
+model ListItem {
+  listId   String
+  gameId   String
+  list     List     @relation(fields: [listId], references: [id], onDelete: Cascade)
+  game     Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  ajouteLe DateTime @default(now())
+
+  @@id([listId, gameId])
+  @@index([gameId])
+  @@map("list_item")
+}
+
 model Game {
   id             String   @id @default(cuid())
-  listId         String
-  list           List     @relation(fields: [listId], references: [id], onDelete: Cascade)
+  /// titre normalisé : un jeu n'existe qu'une fois dans le catalogue
+  cle            String   @unique
+  items          ListItem[]
   titre          String
   igdbId         String?
   steamAppId     String?
@@ -145,7 +161,6 @@ model Game {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  @@unique([listId, titre])
-  @@index([listId])
+  @@index([titre])
   @@map("game")
 }

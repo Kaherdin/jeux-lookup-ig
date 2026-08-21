@@ -24,9 +24,11 @@ export const createNewList = openActionClient
       name: z.string().min(2, "Nom trop court").max(60),
       description: z.string().max(300).optional(),
       isPublic: z.boolean().default(true),
+      /** liste-filtre : critères enregistrés (« f=coop,canape&p=PS5 ») au lieu d'une sélection */
+      filtre: z.string().max(500).optional(),
     })
   )
-  .action(async ({ parsedInput: { name, description, isPublic }, ctx }) => {
+  .action(async ({ parsedInput: { name, description, isPublic, filtre }, ctx }) => {
     if (!(await allow(ctx.user ? "enrich" : "anon", ctx.key))) {
       throw new Error("Trop de listes créées d'un coup — réessaie dans quelques minutes.");
     }
@@ -37,10 +39,11 @@ export const createNewList = openActionClient
     const list = await createList({
       name, slug, description: description || null, isPublic,
       ownerId: ctx.user?.id ?? null,
+      filtre: filtre || null,
     });
     invalidateCaches();
     revalidatePath("/");
-    return { slug: list.slug, name: list.name };
+    return { slug: list.slug, name: list.name, filtre: list.filtre };
   });
 
 export const deleteList = authActionClient

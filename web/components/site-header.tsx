@@ -16,8 +16,8 @@ export async function SiteHeader({
     getPublicLists(),
     session?.user ? getUserLists(session.user.id) : Promise.resolve([]),
   ]);
-  const publicLists = publicRaw.map((l) => ({ slug: l.slug, name: l.name, count: l._count.games }));
-  const userLists = userRaw.map((l) => ({ slug: l.slug, name: l.name, count: l._count.games }));
+  const publicLists = publicRaw.map((l) => ({ slug: l.slug, name: l.name, count: l._count.items }));
+  const userLists = userRaw.map((l) => ({ slug: l.slug, name: l.name, count: l._count.items }));
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur">

@@ -3,6 +3,7 @@
 import { PrismaClient } from "@prisma/client";
 import { enrichGame } from "../lib/enrich.mjs";
 import { toRow } from "../lib/game-row.mjs";
+import { upsertGames } from "./catalogue.mjs";
 
 const prisma = new PrismaClient({ datasources: { db: { url: process.env.POSTGRES_URL } } });
 const env = {
@@ -58,11 +59,7 @@ async function main() {
     await Promise.all(TITRES.slice(i, i + CONC).map(async (t) => {
       const g = await enrichGame({ titre: t, ajouteLe: "2026-07-19" }, env).catch(() => null);
       if (!g || !g.titre) { console.log("  ✗", t); return; }
-      await prisma.game.upsert({
-        where: { listId_titre: { listId: list.id, titre: g.titre } },
-        create: { ...toRow(g), listId: list.id },
-        update: { ...toRow(g), listId: list.id },
-      });
+      await upsertGames(prisma, list.id, [g]);
       ok++;
       console.log(`  ✓ ${g.titre} · ${g.nbJoueurs || "?"} j · ${g.plateformes.join("/")} · ${g.envergure || ""} ${g.dureeVie || ""}`);
     }));

@@ -10,10 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { cn, slugifyTitle } from "@/lib/utils";
+import { cn, slugifyTitle, gameHref } from "@/lib/utils";
 import { useAction } from "next-safe-action/hooks";
 import { gameDetail } from "@/app/actions/games";
 import { SelectionBar } from "@/components/selection-bar";
+import { SaveFilterList } from "@/components/save-filter-list";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CATEGORIES, CATEGORY_BY_KEY, categorize, type CategoryKey } from "@/lib/categories";
 import {
@@ -570,6 +571,7 @@ export function GamesView({
             <ActiveChip key={k} label={findFilter(k)?.label ?? k} onRemove={() => toggleFilter(k)} />
           ))}
           <Button variant="ghost" size="sm" onClick={resetAll}>Tout effacer</Button>
+          <SaveFilterList />
         </div>
       )}
 
@@ -705,7 +707,7 @@ export function GamesView({
             {hero.map((g) => {
               const p = prixVal(g), dev = g.prix?.devise ?? "CHF";
               return (
-                <Link key={g.id} href={`/l/${g.listSlug ?? list.slug}/${slugifyTitle(g.titre)}`}
+                <Link key={g.id} href={gameHref(g.listSlug ?? list.slug, g.titre)}
                   className="min-w-[190px] rounded-xl border bg-card p-3 transition hover:-translate-y-0.5 hover:border-primary">
                   <div className="truncate text-sm font-bold">{g.titre}</div>
                   <div className="text-xs text-muted-foreground">⭐ {noteVal(g)} · {g.gratuit ? "Gratuit" : p != null ? `${p} ${dev}` : "—"}</div>
@@ -771,7 +773,7 @@ export function GamesView({
               <GameDetail g={ficheAffichee} slug={ficheAffichee.listSlug ?? list.slug} lists={lists}
                 dansListes={dansListes}
                 canManage={canManage || gerables.includes(ficheAffichee.listSlug ?? list.slug)} />
-              <Link href={`/l/${ficheAffichee.listSlug ?? list.slug}/${slugifyTitle(ficheAffichee.titre)}`}
+              <Link href={gameHref(ficheAffichee.listSlug ?? list.slug, ficheAffichee.titre)}
                 className="mt-4 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline">
                 Ouvrir la fiche complète ↗
               </Link>
@@ -954,7 +956,7 @@ const Row = memo(function Row({
   const detail = modesDetailText(g);
   const { txt, released } = fmtDate(g.sortieISO);
   const familles = it.cats.map((k) => CATEGORY_BY_KEY[k]).filter(Boolean);
-  const href = `/l/${slug}/${slugifyTitle(g.titre)}`;
+  const href = gameHref(slug, g.titre);
 
   return (
     <div className={cn(GRILLE, "items-start border-b px-2.5 py-2.5 transition hover:bg-muted/40", checked && "bg-primary/5")}>

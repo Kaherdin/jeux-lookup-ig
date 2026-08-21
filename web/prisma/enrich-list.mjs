@@ -14,7 +14,7 @@ const slug = process.argv[2];
 async function main() {
   const list = await prisma.list.findUnique({ where: { slug } });
   if (!list) { console.log("Liste introuvable:", slug); return; }
-  const games = await prisma.game.findMany({ where: { listId: list.id } });
+  const games = await prisma.game.findMany({ where: { items: { some: { listId: list.id } } } });
   let ok = 0, fail = 0, matched = 0;
   const CONC = 4;
   for (let i = 0; i < games.length; i += CONC) {

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { toRow } from "../lib/game-row.mjs";
+import { upsertGames } from "./catalogue.mjs";
 
 const prisma = new PrismaClient({ datasources: { db: { url: process.env.POSTGRES_URL } } });
 
@@ -19,8 +20,9 @@ const list = await prisma.list.upsert({
   },
 });
 
-const rows = games.map((g) => ({ ...toRow(g), listId: list.id })).filter((r) => r.titre);
-const res = await prisma.game.createMany({ data: rows, skipDuplicates: true });
+const { fiches, nouvelles } = await upsertGames(prisma, list.id, games);
+const res = { count: nouvelles };
+console.log(`   ${fiches} fiches au catalogue, ${nouvelles} nouvelles dans la liste.`);
 
 console.log(`✅ Liste "${list.name}" (${list.slug}) · ${res.count} jeux insérés.`);
 await prisma.$disconnect();

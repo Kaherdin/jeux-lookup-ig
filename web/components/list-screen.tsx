@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { Plus } from "lucide-react";
-import { getListBySlug, getGames, getVisibleLists, getOwnedTitles } from "@/lib/store";
+import { getListBySlug, getGames, getCatalogue, getVisibleLists, getOwnedTitles } from "@/lib/store";
 import { getSession } from "@/lib/session";
 import { SiteHeader } from "./site-header";
 import { GamesView } from "./games-view";
@@ -15,7 +15,8 @@ export async function ListScreen({ slug }: { slug: string }) {
   const user = session?.user ?? null;
 
   const [games, allLists, ownedTitles] = await Promise.all([
-    getGames(list.id),
+    // liste-filtre : le contenu est le catalogue, filtré par les critères de l'URL
+    list.filtre ? getCatalogue() : getGames(list.id),
     getVisibleLists(user?.id),
     user ? getOwnedTitles(user.id) : Promise.resolve([]),
   ]);
@@ -33,9 +34,11 @@ export async function ListScreen({ slug }: { slug: string }) {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{list.name}</h1>
             {list.description && <p className="mt-1 text-sm text-muted-foreground">{list.description}</p>}
-            {list.ownerId === null && (
-              <p className="mt-1 text-xs text-muted-foreground">Liste collaborative — ouverte à tous, même sans compte.</p>
-            )}
+            {list.filtre
+              ? <p className="mt-1 text-xs text-muted-foreground">Liste-filtre — vue enregistrée sur le catalogue, elle se met à jour toute seule.</p>
+              : list.ownerId === null && (
+                <p className="mt-1 text-xs text-muted-foreground">Liste collaborative — ouverte à tous, même sans compte.</p>
+              )}
           </div>
           {canAdd && (
             <AddGamesDialog slug={list.slug} trigger={

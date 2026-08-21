@@ -22,7 +22,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string;
   if (!trouve) notFound();
   // la liste ne transporte plus les captures ni la description : la fiche les relit
   const game = (await getGameFull(trouve.id)) ?? trouve;
-  const dansListes = await getListsContaining(game.titre, session?.user?.id);
+  const dansListes = await getListsContaining(game.id, session?.user?.id);
 
   const canManage = !!session?.user && (list.ownerId === null || list.ownerId === session.user.id);
 

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { getSession } from "@/lib/session";
-import { getGamesByLists, getUserLists, getVisibleLists, getOwnedTitles, DEFAULT_LIST_SLUG } from "@/lib/store";
+import { getCatalogue, getGamesByLists, getUserLists, getVisibleLists, getOwnedTitles, DEFAULT_LIST_SLUG } from "@/lib/store";
 import { SiteHeader } from "./site-header";
 import { GamesView } from "./games-view";
 import { AddGamesDialog } from "./add-games-dialog";
@@ -31,21 +31,13 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
   }
 
   const sourceLists = scope === "mine" && user ? await getUserLists(user.id) : await getVisibleLists(user?.id);
+  // « tous les jeux » = le catalogue lui-même : plus rien à agréger ni à dédoublonner,
+  // un jeu n'existe qu'une fois. « mes jeux » reste l'union de mes listes.
   const [rows, ownedTitles] = await Promise.all([
-    getGamesByLists(sourceLists.map((l) => l.id)),
+    scope === "mine" ? getGamesByLists(sourceLists.map((l) => l.id)) : getCatalogue(),
     user ? getOwnedTitles(user.id) : Promise.resolve([]),
   ]);
-  const slugParId = new Map(sourceLists.map((l) => [l.id, l.slug]));
-
-  // dédoublonne par titre : un même jeu peut vivre dans plusieurs listes
-  const seen = new Set<string>();
-  const games: Game[] = [];
-  for (const g of rows) {
-    const k = g.titre.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    games.push({ ...(g as unknown as Game), listSlug: slugParId.get(g.listId) });
-  }
+  const games = rows as unknown as Game[];
 
   const lists = sourceLists.map((l) => ({ slug: l.slug, name: l.name }));
   // une liste sans propriétaire est collaborative ; sinon il faut en être le sien
@@ -53,7 +45,7 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
   const titre = scope === "mine" ? "🎮 Tous mes jeux" : "🎮 Tous les jeux";
   const sousTitre = scope === "mine"
     ? `${games.length} jeux · tes listes réunies (${sourceLists.length})`
-    : `${games.length} jeux · toutes les listes réunies (${sourceLists.length}) · sélectionne-les pour en faire une liste`;
+    : `${games.length} jeux au catalogue · ${sourceLists.length} listes · sélectionne des jeux pour en faire une liste`;
 
   return (
     <>

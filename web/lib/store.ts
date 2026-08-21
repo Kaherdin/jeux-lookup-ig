@@ -20,7 +20,27 @@ export const DEFAULT_LIST_SLUG = "decouvertes";
 
 export type GameInput = Record<string, unknown> & { titre: string };
 
+/**
+ * Clé d'identité d'un jeu dans le catalogue. Deux écritures d'un même titre
+ * (« Halo: Campaign Evolved », « HALO CAMPAIGN EVOLVED ») pointent la même fiche.
+ * Doit rester identique à celle de prisma/migrate-catalogue.mjs.
+ */
+export function cleDe(titre: string): string {
+  return (
+    (titre || "")
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/[™®©]/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim() || "sans-titre"
+  );
+}
+
 // ─── listes ────────────────────────────────────────────────────────────
+// le compteur porte désormais sur les APPARTENANCES, pas sur des jeux possédés
+const LIST_COUNT = { _count: { select: { items: true } } } as const;
+
 export const getPublicLists = () =>
   unstable_cache(publicListsQuery, ["publicLists"], { tags: [TAGS.lists, TAGS.games], revalidate: 300 })();
 
@@ -28,7 +48,7 @@ async function publicListsQuery() {
   return prisma.list.findMany({
     where: { isPublic: true },
     orderBy: { createdAt: "asc" },
-    include: { _count: { select: { games: true } }, owner: { select: { name: true } } },
+    include: { ...LIST_COUNT, owner: { select: { name: true } } },
   });
 }
 
@@ -36,11 +56,7 @@ export const getUserLists = (ownerId: string) =>
   unstable_cache(() => userListsQuery(ownerId), ["userLists", ownerId], { tags: [TAGS.lists, TAGS.games], revalidate: 300 })();
 
 async function userListsQuery(ownerId: string) {
-  return prisma.list.findMany({
-    where: { ownerId },
-    orderBy: { createdAt: "asc" },
-    include: { _count: { select: { games: true } } },
-  });
+  return prisma.list.findMany({ where: { ownerId }, orderBy: { createdAt: "asc" }, include: LIST_COUNT });
 }
 
 export async function getListBySlug(slug: string) {
@@ -61,24 +77,19 @@ export function libSlugs(userId: string) {
 }
 
 /**
- * Titres que l'utilisateur POSSÈDE déjà : ceux venant de ses bibliothèques PSN / Steam
- * importées. Sert à distinguer « je l'ai » de « je le veux » dans les listes.
+ * Titres que l'utilisateur POSSÈDE déjà : ceux de ses bibliothèques PSN / Steam
+ * importées. Sert à distinguer « je l'ai » de « je le veux » partout dans l'app.
  */
 export const getOwnedTitles = (userId: string) =>
   unstable_cache(() => ownedTitlesQuery(userId), ["ownedTitles", userId], { tags: [TAGS.games], revalidate: 300 })();
 
 async function ownedTitlesQuery(userId: string): Promise<string[]> {
   const { psn, steam } = libSlugs(userId);
-  const lists = await prisma.list.findMany({
-    where: { ownerId: userId, slug: { in: [psn, steam] } },
-    select: { id: true },
+  const rows = await prisma.listItem.findMany({
+    where: { list: { ownerId: userId, slug: { in: [psn, steam] } } },
+    select: { game: { select: { titre: true } } },
   });
-  if (!lists.length) return [];
-  const rows = await prisma.game.findMany({
-    where: { listId: { in: lists.map((l) => l.id) } },
-    select: { titre: true },
-  });
-  return rows.map((r) => r.titre);
+  return rows.map((r) => r.game.titre);
 }
 
 /** Toutes les listes visibles par quelqu'un : les publiques + les siennes. */
@@ -90,7 +101,7 @@ async function visibleListsQuery(userId?: string | null) {
   return prisma.list.findMany({
     where: userId ? { OR: [{ isPublic: true }, { ownerId: userId }] } : { isPublic: true },
     orderBy: { createdAt: "asc" },
-    include: { _count: { select: { games: true } } },
+    include: LIST_COUNT,
   });
 }
 
@@ -100,6 +111,7 @@ export async function createList(data: {
   description?: string | null;
   isPublic?: boolean;
   ownerId?: string | null;
+  filtre?: string | null;
 }) {
   return prisma.list.create({ data });
 }
@@ -122,18 +134,38 @@ const LIST_SELECT = {
   urlSteam: true, urlPsn: true, urlStore: true, ajouteLe: true, createdAt: true,
 } as const;
 
-async function gamesQuery(listId: string) {
-  const rows = await prisma.game.findMany({
-    where: { listId },
-    select: LIST_SELECT,
-    orderBy: [{ bienNote: "desc" }, { note: "desc" }, { titre: "asc" }],
-  });
-  // les familles sont calculées une fois ici, plus à chaque rendu chez le client
-  return rows.map(({ description, createdAt, ...g }) => ({
+const ORDRE = [{ bienNote: "desc" as const }, { note: "desc" as const }, { titre: "asc" as const }];
+
+type Brut = { description: string | null; createdAt: Date; ajouteLe: string | null;
+  genre: string | null; themes: string | null; univers: string | null };
+
+/** met en forme une ligne du catalogue : familles calculées ici, pas à chaque rendu client */
+function habiller<T extends Brut>({ description, createdAt, ...g }: T) {
+  return {
     ...g,
     cats: categorize({ genre: g.genre, themes: g.themes, univers: g.univers, description }),
     ajouteLe: g.ajouteLe || createdAt.toISOString().slice(0, 10),
-  }));
+  };
+}
+
+/** Le CATALOGUE entier — c'est la vue « tous les jeux », sans passer par les listes. */
+async function catalogueQuery() {
+  const rows = await prisma.game.findMany({ select: LIST_SELECT, orderBy: ORDRE });
+  return rows.map(habiller);
+}
+
+export function getCatalogue() {
+  return unstable_cache(catalogueQuery, ["catalogue"], { tags: [TAGS.games], revalidate: 300 })();
+}
+
+/** Les jeux d'UNE liste, via ses appartenances. */
+async function gamesQuery(listId: string) {
+  const rows = await prisma.game.findMany({
+    where: { items: { some: { listId } } },
+    select: LIST_SELECT,
+    orderBy: ORDRE,
+  });
+  return rows.map(habiller);
 }
 
 export function getGames(listId: string) {
@@ -142,22 +174,14 @@ export function getGames(listId: string) {
   return unstable_cache(() => gamesQuery(listId), ["games", listId], { tags: [TAGS.games], revalidate: 300 })();
 }
 
-/**
- * Les jeux de PLUSIEURS listes en une seule requête. La page d'accueil en interrogeait
- * une par liste, en parallèle : sept requêtes concurrentes, donc sept connexions
- * réclamées d'un coup à une base qui n'en accorde qu'une poignée.
- */
+/** Les jeux appartenant à AU MOINS UNE des listes données, dédoublonnés par construction. */
 async function gamesMultiQuery(listIds: string[]) {
   const rows = await prisma.game.findMany({
-    where: { listId: { in: listIds } },
-    select: { ...LIST_SELECT, listId: true },
-    orderBy: [{ bienNote: "desc" }, { note: "desc" }, { titre: "asc" }],
+    where: { items: { some: { listId: { in: listIds } } } },
+    select: LIST_SELECT,
+    orderBy: ORDRE,
   });
-  return rows.map(({ description, createdAt, ...g }) => ({
-    ...g,
-    cats: categorize({ genre: g.genre, themes: g.themes, univers: g.univers, description }),
-    ajouteLe: g.ajouteLe || createdAt.toISOString().slice(0, 10),
-  }));
+  return rows.map(habiller);
 }
 
 export function getGamesByLists(listIds: string[]) {
@@ -166,20 +190,17 @@ export function getGamesByLists(listIds: string[]) {
     { tags: [TAGS.games], revalidate: 300 })();
 }
 
-/**
- * Les listes visibles qui contiennent DÉJÀ ce jeu (comparaison sur le titre, comme
- * partout ailleurs : les jeux n'ont pas d'identité partagée entre listes).
- */
-export async function getListsContaining(titre: string, userId?: string | null) {
-  const rows = await prisma.game.findMany({
+/** Les listes visibles qui contiennent déjà ce jeu. */
+export async function getListsContaining(gameId: string, userId?: string | null) {
+  const rows = await prisma.listItem.findMany({
     where: {
-      titre: { equals: titre, mode: "insensitive" },
+      gameId,
       list: userId ? { OR: [{ isPublic: true }, { ownerId: userId }] } : { isPublic: true },
     },
     select: { list: { select: { slug: true, name: true } } },
+    orderBy: { list: { createdAt: "asc" } },
   });
-  const vues = new Set<string>();
-  return rows.map((r) => r.list).filter((l) => !vues.has(l.slug) && vues.add(l.slug));
+  return rows.map((r) => r.list);
 }
 
 /** la fiche complète d'un jeu — captures, description, crédits : chargée à la demande */
@@ -187,34 +208,83 @@ export async function getGameFull(id: string) {
   return prisma.game.findUnique({ where: { id } });
 }
 
+/** un jeu du catalogue par son titre (insensible à la casse et aux accents) */
+export async function getGameByTitre(titre: string) {
+  return prisma.game.findUnique({ where: { cle: cleDe(titre) } });
+}
+
+/** titres déjà présents dans une liste — sert à marquer les doublons dans la preview */
 export async function getTitles(listId: string) {
-  const rows = await prisma.game.findMany({ where: { listId }, select: { titre: true } });
-  return rows.map((r) => r.titre);
+  const rows = await prisma.listItem.findMany({
+    where: { listId },
+    select: { game: { select: { titre: true } } },
+  });
+  return rows.map((r) => r.game.titre);
 }
 
 export async function gameExists(listId: string, titre: string) {
-  const n = await prisma.game.count({
-    where: { listId, titre: { equals: titre, mode: "insensitive" } },
-  });
+  const n = await prisma.listItem.count({ where: { listId, game: { cle: cleDe(titre) } } });
   return n > 0;
 }
 
-export async function upsertGame(listId: string, g: GameInput) {
-  const data = { ...toRow(g), listId };
-  return prisma.game.upsert({
-    where: { listId_titre: { listId, titre: data.titre } },
+/**
+ * Écrit un jeu dans le CATALOGUE (création ou mise à jour de la fiche existante) et,
+ * si une liste est fournie, l'y rattache. Un rescan met donc à jour la fiche vue par
+ * toutes les listes — c'est tout l'intérêt du catalogue.
+ */
+export async function upsertGame(listId: string | null, g: GameInput) {
+  const data = { ...toRow(g), cle: cleDe(g.titre) };
+  const jeu = await prisma.game.upsert({
+    where: { cle: data.cle },
     create: data,
     update: data,
   });
+  if (listId) {
+    await prisma.listItem.upsert({
+      where: { listId_gameId: { listId, gameId: jeu.id } },
+      create: { listId, gameId: jeu.id },
+      update: {},
+    });
+  }
+  return jeu;
 }
 
-export async function deleteGame(listId: string, id: string) {
-  const res = await prisma.game.deleteMany({ where: { id, listId } });
+/** Retire un jeu d'une liste. La fiche reste au catalogue (les autres listes la gardent). */
+export async function removeFromList(listId: string, gameId: string) {
+  const res = await prisma.listItem.deleteMany({ where: { listId, gameId } });
   return res.count > 0;
 }
 
-export async function createGames(listId: string, list: GameInput[]) {
-  const rows = list.map((g) => ({ ...toRow(g), listId })).filter((r: { titre?: string }) => r.titre);
-  const res = await prisma.game.createMany({ data: rows, skipDuplicates: true });
+/** Supprime un jeu du catalogue, donc de toutes les listes (cascade). */
+export async function deleteGameEverywhere(gameId: string) {
+  const res = await prisma.game.deleteMany({ where: { id: gameId } });
+  return res.count > 0;
+}
+
+/** Rattache des jeux du catalogue à une liste. Renvoie le nombre de NOUVELLES entrées. */
+export async function linkGames(listId: string, gameIds: string[]) {
+  if (!gameIds.length) return 0;
+  const res = await prisma.listItem.createMany({
+    data: gameIds.map((gameId) => ({ listId, gameId })),
+    skipDuplicates: true,
+  });
   return res.count;
+}
+
+/**
+ * Ajoute des jeux enrichis : chacun entre au catalogue (ou y met à jour sa fiche),
+ * puis est rattaché à la liste. Renvoie le nombre de jeux NOUVEAUX dans cette liste.
+ */
+export async function createGames(listId: string, list: GameInput[]) {
+  const valides = list.filter((g) => g.titre);
+  if (!valides.length) return 0;
+  // dédoublonne l'entrée elle-même : deux lignes du même jeu dans un même lot
+  const parCle = new Map(valides.map((g) => [cleDe(g.titre), g]));
+  const ids: string[] = [];
+  for (const [cle, g] of parCle) {
+    const data = { ...toRow(g), cle };
+    const jeu = await prisma.game.upsert({ where: { cle }, create: data, update: data });
+    ids.push(jeu.id);
+  }
+  return linkGames(listId, ids);
 }

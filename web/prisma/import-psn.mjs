@@ -2,6 +2,7 @@
 import { PrismaClient } from "@prisma/client";
 import { exchangeNpssoForAccessCode, exchangeAccessCodeForAuthTokens, getUserTitles } from "psn-api";
 import { toRow } from "../lib/game-row.mjs";
+import { upsertGames } from "./catalogue.mjs";
 
 const prisma = new PrismaClient({ datasources: { db: { url: process.env.POSTGRES_URL } } });
 const clean = (s) => (s || "").replace(/[™®©]/g, "").replace(/\s+(Trophies|Trophy Set|Trophy Pack)$/i, "").replace(/\s+/g, " ").trim();
@@ -31,8 +32,8 @@ async function main() {
     where: { slug }, update: {},
     create: { slug, name: "🎮 Ma bibliothèque PlayStation", description: "Jeux joués sur PS4/PS5, importés depuis PSN.", isPublic: true, ownerId: user.id },
   });
-  const rows = lib.map((g) => ({ ...toRow({ titre: g.titre, image: g.image, plateformes: [g.plateforme], ajouteLe: "2026-07-19" }), listId: list.id }));
-  const res = await prisma.game.createMany({ data: rows, skipDuplicates: true });
+  const rows = lib.map((g) => ({ titre: g.titre, image: g.image, plateformes: [g.plateforme], ajouteLe: "2026-07-19" }));
+  const res = { count: (await upsertGames(prisma, list.id, rows)).nouvelles };
   console.log(`${res.count}/${lib.length} jeux importés (${user.email}) → https://jeux-lookup-ig.vercel.app/l/${slug}`);
 }
 main().catch((e) => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());
