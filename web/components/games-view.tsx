@@ -188,10 +188,13 @@ const findFilter = (k: string) => ALL_FILTERS.find((f) => f.key === k);
  * qu'un jeu écarté parce qu'on ne connaît pas sa durée de vie.
  */
 type Bornes = [number, number];
+const ANNEE = new Date().getFullYear();
 const PLAGES: Record<string, { label: string; unite: string; opts: number[]; param: string }> = {
   note: { label: "Note", unite: "", opts: [0, 50, 60, 70, 80, 90, 100], param: "n" },
   duree: { label: "Durée de vie", unite: "h", opts: [0, 5, 10, 20, 40, 60, 100], param: "d" },
   joueurs: { label: "Joueurs", unite: "", opts: [1, 2, 3, 4, 6, 8], param: "j" },
+  // la borne haute dépasse l'année en cours : les jeux à venir doivent rester dedans
+  annee: { label: "Année de sortie", unite: "", opts: [1990, 2000, 2010, 2015, 2020, ANNEE - 2, ANNEE, ANNEE + 2], param: "a" },
 };
 const bornesPleines = (k: string): Bornes => {
   const o = PLAGES[k].opts;
@@ -207,6 +210,12 @@ const litBornes = (k: string, v: string | null): Bornes => {
 const valeurPlage = (k: string, g: Game): number | null => {
   if (k === "note") return noteVal(g);
   if (k === "joueurs") return g.nbJoueursMax ?? null;
+  if (k === "annee") {
+    // sortieVal renvoie « 9999 » quand on ne sait pas : c'est une info manquante,
+    // pas une sortie dans un futur lointain — le filtre doit la traiter comme telle.
+    const an = +sortieVal(g).slice(0, 4);
+    return an >= 9999 ? null : an;
+  }
   const d = dureeVal(g);
   return d < 0 ? null : d;
 };
@@ -861,7 +870,7 @@ function Fourchette({
   onChange: (b: Bornes) => void;
 }) {
   const max = def.opts[def.opts.length - 1];
-  const fmt = (v: number) => `${v}${def.unite}${v === max && k !== "note" ? "+" : ""}`;
+  const fmt = (v: number) => `${v}${def.unite}${v === max && k !== "note" && k !== "annee" ? "+" : ""}`;
   const actif = !estPleine(k, bornes);
   return (
     <div className="space-y-1">
