@@ -239,6 +239,13 @@ export function GamesView({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // les ajouts récents remontent en tête ; débrayable, parce que ça bouscule le tri
   const [epingler, setEpingler] = useState(() => sp.get("ep") !== "0");
+  /**
+   * Un tri CHOISI ne se discute pas. L'épinglage ne vaut que pour le tri par défaut,
+   * celui de l'arrivée sur la page. Sinon il coupe la liste en DEUX blocs triés
+   * séparément — les ajouts de la semaine, puis tout le reste — et l'ordre demandé
+   * semble « repartir » au milieu de la liste.
+   */
+  const [triExplicite, setTriExplicite] = useState(() => !!sp.get("tri"));
   const [fiche, setFiche] = useState<Game | null>(null);
   const [vue, setVue] = useState<"collection" | "decouvrir">(() => (sp.get("vue") === "decouvrir" ? "decouvrir" : "collection"));
 
@@ -348,9 +355,13 @@ export function GamesView({
   const shown = useMemo(() => {
     const l = index.filter((it) => keep(it));
     // le tri porte sur TOUTE la liste filtrée, jamais sur une page
-    l.sort(faireComparateur({ sortKey, sortDir, epingler, parSousType: sortKey === "type" && cats.size > 0 }));
+    l.sort(faireComparateur({
+      sortKey, sortDir,
+      epingler: epingler && !triExplicite,
+      parSousType: sortKey === "type" && cats.size > 0,
+    }));
     return l;
-  }, [index, keep, sortKey, sortDir, cats, epingler]);
+  }, [index, keep, sortKey, sortDir, cats, epingler, triExplicite]);
 
   // compteurs : seulement quand le panneau est ouvert — inutile de payer 11 passes sinon
   const counts = useMemo(() => {
@@ -425,6 +436,7 @@ export function GamesView({
   const nbActifs = active.size + cats.size + sousTags.size + nbPlages + (platformFilter !== "all" ? 1 : 0) + (q ? 1 : 0);
 
   const changeSort = (k: string) => {
+    setTriExplicite(true);
     if (k === sortKey) setSortDir((d) => -d);
     else { setSortKey(k); setSortDir(SORT_DEFDIR[k] ?? -1); }
   };
@@ -527,14 +539,14 @@ export function GamesView({
         </Button>
         {vue === "collection" && (
           <>
-            <Select value={sortKey} onValueChange={(v) => { setSortKey(v); setSortDir(SORT_DEFDIR[v] ?? -1); }}>
+            <Select value={sortKey} onValueChange={(v) => changeSort(v)}>
               <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {Object.entries(SORT_LABEL).map(([k, l]) => <SelectItem key={k} value={k}>Tri : {l}</SelectItem>)}
               </SelectContent>
             </Select>
             <Button variant="outline" size="icon" title="Inverser le sens"
-              onClick={() => setSortDir((d) => -d)}>{sortDir === 1 ? "▲" : "▼"}</Button>
+              onClick={() => { setTriExplicite(true); setSortDir((d) => -d); }}>{sortDir === 1 ? "▲" : "▼"}</Button>
           </>
         )}
       </div>
@@ -652,8 +664,13 @@ export function GamesView({
           <Bloc titre="Tri">
             <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
               <Checkbox checked={epingler} onCheckedChange={(c) => setEpingler(!!c)} />
-              🆕 Garder mes ajouts de la semaine en tête, quel que soit le tri
+              🆕 Remonter mes ajouts de la semaine en tête — tant que je n&apos;ai pas choisi de tri
             </label>
+            {triExplicite && (
+              <p className="mt-1 text-[11px] text-muted-foreground/70">
+                Tri « {SORT_LABEL[sortKey]} » choisi : la liste entière suit cet ordre, sans exception.
+              </p>
+            )}
           </Bloc>
 
           <div className="flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
