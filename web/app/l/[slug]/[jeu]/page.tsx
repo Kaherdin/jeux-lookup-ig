@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
-import { getListBySlug, getGames, getVisibleLists, getGameFull } from "@/lib/store";
+import { getListBySlug, getGames, getVisibleLists, getGameFull, getListsContaining } from "@/lib/store";
 import { getSession } from "@/lib/session";
 import { slugifyTitle } from "@/lib/utils";
 import { SiteHeader } from "@/components/site-header";
@@ -22,6 +22,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string;
   if (!trouve) notFound();
   // la liste ne transporte plus les captures ni la description : la fiche les relit
   const game = (await getGameFull(trouve.id)) ?? trouve;
+  const dansListes = await getListsContaining(game.titre, session?.user?.id);
 
   const canManage = !!session?.user && (list.ownerId === null || list.ownerId === session.user.id);
 
@@ -34,7 +35,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string;
           <ChevronLeft className="mr-1 h-4 w-4" /> {list.name}
         </Link>
         <GameDetail g={game as unknown as Game} slug={list.slug} canManage={canManage}
-          lists={lists.map((l) => ({ slug: l.slug, name: l.name }))} />
+          lists={lists.map((l) => ({ slug: l.slug, name: l.name }))} dansListes={dansListes} />
       </main>
     </>
   );
