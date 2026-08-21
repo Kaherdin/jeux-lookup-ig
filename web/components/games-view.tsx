@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect, useCallback, useRef, useDeferredValue, me
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { Search, SlidersHorizontal, X, Check } from "lucide-react";
 import type { Game, ListMeta } from "@/lib/types";
 import { Input } from "@/components/ui/input";
@@ -67,8 +68,16 @@ const dureeVal = (g: Game) => { const m = (g.dureeVie ?? "").match(/\d+/); retur
 const noteColor = (n: number) => (n >= 85 ? "#3fb950" : n >= 75 ? "#f5c518" : n >= 60 ? "#ff8c42" : "#f85149");
 const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
-/** nombre de lignes rendues d'un coup — au-delà, un bouton « en afficher plus » */
-const PAGE = 60;
+/**
+ * Une ligne = une grille, pas un <tr>. Le tableau HTML rendait la virtualisation
+ * pénible (largeurs recalculées au fil du défilement) ; en grille, les colonnes sont
+ * déclarées une fois pour toutes et on peut positionner les lignes librement.
+ * Les colonnes tombent avec la largeur d'écran : 3 sur mobile, 5 dès md, 7 dès lg.
+ */
+const GRILLE =
+  "grid grid-cols-[32px_minmax(0,1fr)_88px] gap-2 md:grid-cols-[36px_minmax(0,2fr)_minmax(150px,1fr)_120px_100px] lg:grid-cols-[36px_minmax(0,2fr)_minmax(170px,1fr)_130px_110px_90px_140px]";
+/** hauteur approximative d'une ligne, affinée à la mesure */
+const HAUTEUR_LIGNE = 116;
 
 function fmtDate(iso: string | null) {
   if (!iso) return { txt: "", released: false };
@@ -266,7 +275,8 @@ export function GamesView({
 
   const [panel, setPanel] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [limit, setLimit] = useState(PAGE);
+  // les ajouts récents remontent en tête ; débrayable, parce que ça bouscule le tri
+  const [epingler, setEpingler] = useState(() => sp.get("ep") !== "0");
   const [fiche, setFiche] = useState<Game | null>(null);
   const [vue, setVue] = useState<"collection" | "decouvrir">(() => (sp.get("vue") === "decouvrir" ? "decouvrir" : "collection"));
 
@@ -293,6 +303,7 @@ export function GamesView({
         put(def.param, estPleine(k, b) ? null : `${b[0]}-${b[1]}`);
       }
       put("si", sansInfo ? null : "0");
+      put("ep", epingler ? null : "0");
       put("vue", vue === "decouvrir" ? "decouvrir" : null);
       put("tri", sortKey === "note" ? null : sortKey);
       put("sens", sortDir === (SORT_DEFDIR[sortKey] ?? -1) ? null : sortDir === 1 ? "asc" : "desc");
@@ -301,7 +312,7 @@ export function GamesView({
       if (url !== window.location.pathname + window.location.search) window.history.replaceState(null, "", url);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, cats, sousTags, platformFilter, active, plages, sansInfo, sortKey, sortDir, vue]);
+  }, [q, cats, sousTags, platformFilter, active, plages, sansInfo, sortKey, sortDir, vue, epingler]);
 
   const owned = useMemo(() => new Set(ownedTitles.map((t) => t.toLowerCase())), [ownedTitles]);
   const groups = useMemo(() => GROUPS.filter((g) => g.titre !== "Ma bibliothèque" || showOwned), [showOwned]);
@@ -382,18 +393,16 @@ export function GamesView({
       : (it: Indexed) => base(it.g);
     l.sort((a, b) => {
       // ce qu'on vient d'ajouter reste en tête quel que soit le tri, pendant 7 jours
-      const ra = estRecent(a.g) ? 1 : 0, rb = estRecent(b.g) ? 1 : 0;
-      if (ra !== rb) return rb - ra;
+      if (epingler) {
+        const ra = estRecent(a.g) ? 1 : 0, rb = estRecent(b.g) ? 1 : 0;
+        if (ra !== rb) return rb - ra;
+      }
       const va = val(a), vb = val(b);
       const r = va < vb ? -1 : va > vb ? 1 : 0;
       return r * sortDir || a.g.titre.localeCompare(b.g.titre);
     });
     return l;
-  }, [index, keep, sortKey, sortDir, cats]);
-
-  // on ne repart du haut que quand les critères changent (pas au tri, pas à la sélection)
-  useEffect(() => { setLimit(PAGE); }, [qq, cats, sousTags, platformFilter, active, plages, sansInfo]);
-  const visible = useMemo(() => shown.slice(0, limit), [shown, limit]);
+  }, [index, keep, sortKey, sortDir, cats, epingler]);
 
   // compteurs : seulement quand le panneau est ouvert — inutile de payer 11 passes sinon
   const counts = useMemo(() => {
@@ -488,6 +497,30 @@ export function GamesView({
   const onCheck = useCallback((id: string, c: boolean) => {
     setSelected((prev) => { const n = new Set(prev); c ? n.add(id) : n.delete(id); return n; });
   }, []);
+
+  /**
+   * Virtualisation : on ne rend que la vingtaine de lignes visibles, quelle que soit
+   * la taille de la liste. Le tri et le filtre, eux, portent toujours sur la TOTALITÉ
+   * — plus de « afficher plus » qui découpait le résultat après coup.
+   * Ancrée sur le défilement de la page : pas d'ascenseur interne.
+   */
+  const listeRef = useRef<HTMLDivElement>(null);
+  const [decalage, setDecalage] = useState(0);
+  // volontairement sans tableau de dépendances : la position de la liste bouge dès que
+  // le panneau s'ouvre, qu'une puce apparaît ou que l'écran change. React ne re-rend
+  // pas quand la mesure est identique, donc ça converge au lieu de boucler.
+  useEffect(() => {
+    const maj = () => setDecalage(listeRef.current?.offsetTop ?? 0);
+    maj();
+    window.addEventListener("resize", maj);
+    return () => window.removeEventListener("resize", maj);
+  });
+  const virt = useWindowVirtualizer({
+    count: shown.length,
+    estimateSize: () => HAUTEUR_LIGNE,
+    overscan: 8,
+    scrollMargin: decalage,
+  });
 
   const allShownSelected = shown.length > 0 && shown.every((it) => selected.has(it.g.id));
   function toggleSelectAll() {
@@ -667,6 +700,13 @@ export function GamesView({
             </div>
           </Bloc>
 
+          <Bloc titre="Tri">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox checked={epingler} onCheckedChange={(c) => setEpingler(!!c)} />
+              🆕 Garder mes ajouts de la semaine en tête, quel que soit le tri
+            </label>
+          </Bloc>
+
           <div className="flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
             <span className="font-semibold">
               {vue === "collection" ? `${shown.length} jeu${shown.length > 1 ? "x" : ""} sur ${games.length}` : "Critères appliqués à la recherche IGDB"}
@@ -722,40 +762,34 @@ export function GamesView({
         <EmptyState titre="Aucun jeu ne correspond" texte="Les filtres actifs ne laissent rien passer."
           action={<Button onClick={resetAll}>Réinitialiser les filtres</Button>} />
       ) : (
-        <>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[1040px] text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="w-9 p-2.5">
-                    <Checkbox checked={allShownSelected} onCheckedChange={toggleSelectAll} aria-label="Tout sélectionner" />
-                  </th>
-                  <th className="cursor-pointer p-2.5 whitespace-nowrap" onClick={() => changeSort("titre")}>Jeu{arrow("titre")}</th>
-                  <th className="cursor-pointer p-2.5" onClick={() => changeSort("type")}>Type{arrow("type")}</th>
-                  <th className="cursor-pointer p-2.5" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</th>
-                  <th className="cursor-pointer p-2.5" onClick={() => changeSort("note")}>Note{arrow("note")}</th>
-                  <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</th>
-                  <th className="hidden cursor-pointer p-2.5 md:table-cell" onClick={() => changeSort("sortie")}>Sortie{arrow("sortie")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((it) => (
-                  <Row key={it.g.id} g={it.g} slug={it.g.listSlug ?? list.slug}
+        <div className="rounded-lg border">
+          {/* en-tête : mêmes colonnes que les lignes, collé en haut de l'écran */}
+          <div className={cn(GRILLE, "sticky top-[57px] z-10 items-center border-b bg-background/95 px-2.5 py-2 text-xs uppercase tracking-wide text-muted-foreground backdrop-blur")}>
+            <Checkbox checked={allShownSelected} onCheckedChange={toggleSelectAll} aria-label="Tout sélectionner" />
+            <button className="text-left hover:text-foreground" onClick={() => changeSort("titre")}>Jeu{arrow("titre")}</button>
+            <button className="hidden text-left hover:text-foreground md:block" onClick={() => changeSort("type")}>Type{arrow("type")}</button>
+            <button className="hidden text-left hover:text-foreground md:block" onClick={() => changeSort("prix")}>Prix{arrow("prix")}</button>
+            <button className="text-left hover:text-foreground" onClick={() => changeSort("note")}>Note{arrow("note")}</button>
+            <button className="hidden text-left hover:text-foreground lg:block" onClick={() => changeSort("joueurs")}>Joueurs{arrow("joueurs")}</button>
+            <button className="hidden text-left hover:text-foreground lg:block" onClick={() => changeSort("sortie")}>Sortie{arrow("sortie")}</button>
+          </div>
+
+          <div ref={listeRef} className="relative" style={{ height: virt.getTotalSize() }}>
+            {virt.getVirtualItems().map((v) => {
+              const it = shown[v.index];
+              return (
+                <div key={it.g.id} data-index={v.index} ref={virt.measureElement}
+                  className="absolute inset-x-0 top-0"
+                  style={{ transform: `translateY(${v.start - decalage}px)` }}>
+                  <Row it={it} slug={it.g.listSlug ?? list.slug}
                     possede={showOwned && owned.has(it.key)}
                     checked={selected.has(it.g.id)}
                     onCheck={onCheck} onOpen={onOpen} />
-                ))}
-              </tbody>
-            </table>
+                </div>
+              );
+            })}
           </div>
-          {shown.length > visible.length && (
-            <div className="flex justify-center">
-              <Button variant="outline" onClick={() => setLimit((n) => n + PAGE * 2)}>
-                Afficher plus ({shown.length - visible.length} restants)
-              </Button>
-            </div>
-          )}
-        </>
+        </div>
       )}
 
       </>
@@ -938,78 +972,76 @@ function Thumb({ g, href, onOpen }: { g: Game; href: string; onOpen: () => void 
 // mémoïsée : une frappe ou un clic de filtre ne re-rend que les lignes qui changent
 // vraiment (props toutes primitives, `onCheck` stable côté parent).
 const Row = memo(function Row({
-  g, slug, possede, checked, onCheck, onOpen,
+  it, slug, possede, checked, onCheck, onOpen,
 }: {
-  g: Game; slug: string; possede: boolean; checked: boolean;
+  it: Indexed; slug: string; possede: boolean; checked: boolean;
   onCheck: (id: string, c: boolean) => void; onOpen: (g: Game) => void;
 }) {
+  const g = it.g;
   const m = md(g);
   const p = prixVal(g);
   const n = noteVal(g);
   const dev = g.prix?.devise ?? "CHF";
   const store = g.prix?.store ?? "Steam";
   const detail = modesDetailText(g);
-  const familles = (g.cats ?? categorize(g)).map((k) => CATEGORY_BY_KEY[k]).filter(Boolean);
   const { txt, released } = fmtDate(g.sortieISO);
+  const familles = it.cats.map((k) => CATEGORY_BY_KEY[k]).filter(Boolean);
+  const href = `/l/${slug}/${slugifyTitle(g.titre)}`;
+
   return (
-    <tr className={cn("border-b hover:bg-muted/40", checked && "bg-primary/5")}>
-      <td className="p-2.5 align-top">
+    <div className={cn(GRILLE, "items-start border-b px-2.5 py-2.5 transition hover:bg-muted/40", checked && "bg-primary/5")}>
+      <div className="pt-1">
         <Checkbox checked={checked} onCheckedChange={(c) => onCheck(g.id, !!c)} aria-label={`Sélectionner ${g.titre}`} />
-      </td>
-      <td className="min-w-[340px] p-2.5">
-        <div className="flex items-start gap-3">
-          <Thumb g={g} href={`/l/${slug}/${slugifyTitle(g.titre)}`} onOpen={() => onOpen(g)} />
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <div className="flex items-baseline gap-2">
-              <Link href={`/l/${slug}/${slugifyTitle(g.titre)}`}
-                onClick={(e) => { if (clicSimple(e)) { e.preventDefault(); onOpen(g); } }}
-                className="min-w-0 truncate text-left text-[15px] font-bold hover:text-primary hover:underline">{g.titre}</Link>
-              {/* statut : des pastilles expliquées au survol, plutôt qu'une colonne entière */}
-              <span className="flex shrink-0 items-center gap-1 text-[13px]">
-                {possede && <span title="déjà dans ma bibliothèque">✔</span>}
-                {g.dispo && <span title="disponible">✅</span>}
-                {(g.gratuit || g.gratuitMention) && <span title={g.gratuit ? "gratuit" : `gratuit — ${g.gratuitMention}`}>🆓</span>}
-                {g.bonPlan && <span title="bon plan">💸</span>}
-                {g.bienNote && <span title="bien noté">⭐</span>}
-                {aVenir(g) && <span title="pas encore sorti">🔜</span>}
-                {estInde(g) && <span title="studio indé">🎨</span>}
-                {estRecent(g) && <span title="ajouté cette semaine">🆕</span>}
+      </div>
+
+      <div className="flex min-w-0 items-start gap-3">
+        <Thumb g={g} href={href} onOpen={() => onOpen(g)} />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="flex items-baseline gap-2">
+            <Link href={href} onClick={(e) => { if (clicSimple(e)) { e.preventDefault(); onOpen(g); } }}
+              className="min-w-0 truncate text-left text-[15px] font-bold hover:text-primary hover:underline">{g.titre}</Link>
+            {/* statut : des pastilles expliquées au survol, plutôt qu'une colonne entière */}
+            <span className="flex shrink-0 items-center gap-1 text-[13px]">
+              {possede && <span title="déjà dans ma bibliothèque">✔</span>}
+              {g.dispo && <span title="disponible">✅</span>}
+              {(g.gratuit || g.gratuitMention) && <span title={g.gratuit ? "gratuit" : `gratuit — ${g.gratuitMention}`}>🆓</span>}
+              {g.bonPlan && <span title="bon plan">💸</span>}
+              {g.bienNote && <span title="bien noté">⭐</span>}
+              {aVenir(g) && <span title="pas encore sorti">🔜</span>}
+              {estInde(g) && <span title="studio indé">🎨</span>}
+              {estRecent(g) && <span title="ajouté cette semaine">🆕</span>}
+            </span>
+          </div>
+          <div className="truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
+          <div className="flex flex-wrap items-center gap-1">
+            {m.solo && <Tag className="bg-violet-500/15 text-violet-400">🎯 Solo</Tag>}
+            {m.coop && <Tag className="bg-teal-500/15 text-teal-400">👥 Coop</Tag>}
+            {m.pvp && <Tag className="bg-pink-500/15 text-pink-400">⚔️ PvP</Tag>}
+            {!m.solo && !m.coop && !m.pvp && m.multi && <Tag className="bg-muted text-muted-foreground">🌐 Multi</Tag>}
+            {!!g.plateformes.length && (
+              <span className="truncate text-[11px] text-muted-foreground" title={g.plateformes.join(" · ")}>
+                {g.plateformes.slice(0, 4).join(" · ")}
               </span>
-            </div>
-            <div className="truncate text-xs text-muted-foreground">{[g.genre, g.univers].filter(Boolean).join(" · ")}</div>
-            <div className="flex flex-wrap items-center gap-1">
-              {m.solo && <Tag className="bg-violet-500/15 text-violet-400">🎯 Solo</Tag>}
-              {m.coop && <Tag className="bg-teal-500/15 text-teal-400">👥 Coop</Tag>}
-              {m.pvp && <Tag className="bg-pink-500/15 text-pink-400">⚔️ PvP</Tag>}
-              {!m.solo && !m.coop && !m.pvp && m.multi && <Tag className="bg-muted text-muted-foreground">🌐 Multi</Tag>}
-              {!!g.plateformes.length && (
-                <span className="truncate text-[11px] text-muted-foreground" title={g.plateformes.join(" · ")}>
-                  {g.plateformes.slice(0, 4).join(" · ")}
-                </span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
-              {detail && <span>{detail}</span>}
-              {g.dureeVie && <span title="durée de vie approximative">⏱ {g.dureeVie}</span>}
-              {g.ajouteLe && <span title={`ajouté le ${g.ajouteLe}`}>+ {fmtJour(g.ajouteLe)}</span>}
-              {g.urlSteam && <a href={g.urlSteam} target="_blank" rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()} className="hover:text-primary hover:underline">Steam ↗</a>}
-              {g.urlPsn && <a href={g.urlPsn} target="_blank" rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()} className="hover:text-primary hover:underline">PS ↗</a>}
-              {g.urlStore && g.urlStore !== g.urlSteam && <a href={g.urlStore} target="_blank" rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()} className="hover:text-primary hover:underline">Deal ↗</a>}
-            </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+            {detail && <span>{detail}</span>}
+            {g.dureeVie && <span title="durée de vie approximative">⏱ {g.dureeVie}</span>}
+            {g.ajouteLe && <span title={`ajouté le ${g.ajouteLe}`}>+ {fmtJour(g.ajouteLe)}</span>}
+            {g.urlSteam && <a href={g.urlSteam} target="_blank" rel="noopener noreferrer" className="hover:text-primary hover:underline">Steam ↗</a>}
+            {g.urlPsn && <a href={g.urlPsn} target="_blank" rel="noopener noreferrer" className="hover:text-primary hover:underline">PS ↗</a>}
+            {g.urlStore && g.urlStore !== g.urlSteam && <a href={g.urlStore} target="_blank" rel="noopener noreferrer" className="hover:text-primary hover:underline">Deal ↗</a>}
           </div>
         </div>
-      </td>
-      <td className="p-2.5 align-top">
-        <div className="flex flex-wrap gap-1">
-          {familles.length ? familles.map((c) => (
-            <Tag key={c.key} className="bg-muted text-foreground" title={c.hint}>{c.emoji} {c.label}</Tag>
-          )) : <span className="text-muted-foreground">—</span>}
-        </div>
-      </td>
-      <td className="p-2.5 whitespace-nowrap">
+      </div>
+
+      <div className="hidden flex-wrap gap-1 md:flex">
+        {familles.length ? familles.map((c) => (
+          <Tag key={c.key} className="bg-muted text-foreground" title={c.hint}>{c.emoji} {c.label}</Tag>
+        )) : <span className="text-muted-foreground">—</span>}
+      </div>
+
+      <div className="hidden whitespace-nowrap text-sm md:block">
         {g.gratuit ? <span className="font-bold text-emerald-500">Gratuit</span> : p == null ? <span className="text-muted-foreground">—</span> : (
           <>
             <div className="font-bold">{p} {dev}{g.reducPct > 0 && <span className="ml-1 text-orange-500">-{g.reducPct}%</span>}</div>
@@ -1017,11 +1049,13 @@ const Row = memo(function Row({
             {g.prix?.plusBasHisto != null && <div className="text-[11px] text-muted-foreground">bas {g.prix.plusBasHisto} {dev}</div>}
           </>
         )}
-      </td>
-      <td className="p-2.5">
+      </div>
+
+      <div className="text-sm">
         {n == null ? <span className="text-muted-foreground">—</span> : (
           <>
-            <span className="inline-flex min-w-[34px] items-center justify-center rounded-md px-1.5 py-1 text-[13px] font-extrabold" style={{ background: noteColor(n) + "22", color: noteColor(n) }}>{n}</span>
+            <span className="inline-flex min-w-[34px] items-center justify-center rounded-md px-1.5 py-1 text-[13px] font-extrabold"
+              style={{ background: noteColor(n) + "22", color: noteColor(n) }}>{n}</span>
             {(g.noteSource || g.steamPct != null) && (
               <div className="mt-0.5 text-[10px] text-muted-foreground">
                 {/* « Steam 35166 avis » → « Steam » : le compte est juste en dessous */}
@@ -1032,11 +1066,14 @@ const Row = memo(function Row({
           </>
         )}
         <Popularite g={g} />
-      </td>
-      <td className="hidden p-2.5 md:table-cell">{g.nbJoueurs || <span className="text-muted-foreground">—</span>}</td>
-      <td className="hidden p-2.5 md:table-cell">
-        {txt ? <span className={released ? "font-bold text-emerald-500" : "text-muted-foreground"}>{txt}</span> : <span className="text-muted-foreground">{g.sortiePrec || "—"}</span>}
-      </td>
-    </tr>
+      </div>
+
+      <div className="hidden text-sm lg:block">{g.nbJoueurs || <span className="text-muted-foreground">—</span>}</div>
+
+      <div className="hidden text-sm lg:block">
+        {txt ? <span className={released ? "font-bold text-emerald-500" : "text-muted-foreground"}>{txt}</span>
+          : <span className="text-muted-foreground">{g.sortiePrec || "—"}</span>}
+      </div>
+    </div>
   );
 });
