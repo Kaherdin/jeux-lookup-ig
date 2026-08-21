@@ -16,6 +16,10 @@ import { gameDetail } from "@/app/actions/games";
 import { SelectionBar } from "@/components/selection-bar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CATEGORIES, CATEGORY_BY_KEY, categorize, type CategoryKey } from "@/lib/categories";
+import {
+  https, prixVal, noteVal, md, TODAY, estRecent, aVenir, estInde, estGrosStudio,
+  sortieVal, popuVal, fmtNb, dureeVal, SORT_VAL, SORT_DEFDIR, SORT_LABEL, faireComparateur,
+} from "@/lib/tri";
 
 // la fiche (et sa lightbox) ne sont chargées qu'à la première ouverture de la modale :
 // inutile de les faire porter à la page de liste, qui doit rester légère.
@@ -31,40 +35,6 @@ const DiscoverView = dynamic(() => import("@/components/discover-view").then((m)
 /** clic « normal » : sans modificateur ni clic du milieu — sinon on laisse le lien faire */
 const clicSimple = (e: React.MouseEvent) => !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
 
-const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
-const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
-const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
-const md = (g: Game) => g.modes ?? {};
-const TODAY = new Date().toISOString().slice(0, 10);
-/** ajouté il y a moins de 7 jours — étiquette temporaire et remontée en tête de liste */
-const IL_Y_A_7J = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
-const estRecent = (g: Game) => !!g.ajouteLe && g.ajouteLe >= IL_Y_A_7J;
-/** pas encore sortie : le drapeau Steam, ou une date de sortie dans le futur */
-const aVenir = (g: Game) => !!g.comingSoon || (!!g.sortieISO && g.sortieISO > TODAY.slice(0, g.sortieISO.length));
-/** envergure : « Indé » (LLM/heuristique) vs « AA » / « AAA » */
-const estInde = (g: Game) => /ind/i.test(g.envergure ?? "");
-const estGrosStudio = (g: Game) => /^aa/i.test(g.envergure ?? "");
-/**
- * Clé de tri par date de sortie. Une date inconnue ou seulement approximative
- * (« Bientôt », « 2026 ») vaut une date LOINTAINE, pas une date vide : trié du plus
- * récent au plus ancien, ce qui n'est pas encore sorti doit être en HAUT de la liste.
- */
-const sortieVal = (g: Game) => {
-  if (g.sortieISO) return g.sortieISO;
-  const an = (g.sortiePrec ?? "").match(/\d{4}/);
-  return an ? `${an[0]}-12-31` : "9999";
-};
-/**
- * Popularité : avis Steam cumulés, ou votes IGDB pour les jeux hors Steam.
- * Les joueurs connectés (`joueursSteam`) sont affichés à part — c'est une photo
- * prise au moment du scan, pas une valeur de tri fiable.
- */
-const popuVal = (g: Game) => Math.max(g.steamAvis ?? 0, g.igdbVotes ?? 0);
-/** 1 234 → « 1,2k » ; 45 678 → « 46k » */
-const fmtNb = (n: number) =>
-  n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1).replace(".", ",")}k` : String(n);
-/** « ~12h », « 100h+ » → 12, 100 (pour trier ; -1 quand on ne sait pas) */
-const dureeVal = (g: Game) => { const m = (g.dureeVie ?? "").match(/\d+/); return m ? +m[0] : -1; };
 const noteColor = (n: number) => (n >= 85 ? "#3fb950" : n >= 75 ? "#f5c518" : n >= 60 ? "#ff8c42" : "#f85149");
 const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
@@ -113,25 +83,6 @@ function modesDetailText(g: Game) {
 function Tag({ children, className, title }: { children: React.ReactNode; className?: string; title?: string }) {
   return <span title={title} className={cn("inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap", className)}>{children}</span>;
 }
-
-const SORT_VAL: Record<string, (g: Game) => number | string> = {
-  titre: (g) => g.titre.toLowerCase(),
-  prix: (g) => prixVal(g) ?? Infinity,
-  note: (g) => noteVal(g) ?? -1,
-  joueurs: (g) => g.nbJoueursMax ?? -1,
-  sortie: sortieVal,
-  duree: dureeVal,
-  popu: popuVal,
-  ajout: (g) => g.ajouteLe ?? "",
-  // trie par famille principale, dans l'ordre de CATEGORIES (Aventure, Action, FPS…)
-  type: (g) => {
-    const k = (g.cats ?? categorize(g))[0];
-    const i = CATEGORIES.findIndex((c) => c.key === k);
-    return i < 0 ? 99 : i;
-  },
-};
-const SORT_DEFDIR: Record<string, number> = { titre: 1, prix: 1, note: -1, joueurs: -1, sortie: -1, duree: -1, popu: -1, ajout: -1, type: 1 };
-const SORT_LABEL: Record<string, string> = { note: "Note", prix: "Prix", joueurs: "Joueurs", sortie: "Sortie", duree: "Durée de vie", popu: "Popularité", ajout: "Date d\u2019ajout", type: "Type", titre: "Titre" };
 
 // filtres à cocher, regroupés par thème pour que le panneau reste lisible
 type FilterDef = { key: string; label: string; test: (g: Game, owned: Set<string>) => boolean };
@@ -396,22 +347,8 @@ export function GamesView({
 
   const shown = useMemo(() => {
     const l = index.filter((it) => keep(it));
-    const base = SORT_VAL[sortKey] ?? SORT_VAL.note;
-    // « Type » trie par famille ; mais dès qu'une famille est cochée, la famille ne
-    // distingue plus rien — on trie alors par SOUS-type, l'étiquette d'origine du jeu.
-    const val = sortKey === "type" && cats.size
-      ? (it: Indexed) => (it.toks[0] ?? "").toLowerCase()
-      : (it: Indexed) => base(it.g);
-    l.sort((a, b) => {
-      // ce qu'on vient d'ajouter reste en tête quel que soit le tri, pendant 7 jours
-      if (epingler) {
-        const ra = estRecent(a.g) ? 1 : 0, rb = estRecent(b.g) ? 1 : 0;
-        if (ra !== rb) return rb - ra;
-      }
-      const va = val(a), vb = val(b);
-      const r = va < vb ? -1 : va > vb ? 1 : 0;
-      return r * sortDir || a.g.titre.localeCompare(b.g.titre);
-    });
+    // le tri porte sur TOUTE la liste filtrée, jamais sur une page
+    l.sort(faireComparateur({ sortKey, sortDir, epingler, parSousType: sortKey === "type" && cats.size > 0 }));
     return l;
   }, [index, keep, sortKey, sortDir, cats, epingler]);
 
