@@ -11,3 +11,6 @@ enrich-cache.json
 .env*
 
 .vscode/
+
+# sauvegardes de base : volumineuses (6 Mo par prise) et contenant des e-mails
+backups/
