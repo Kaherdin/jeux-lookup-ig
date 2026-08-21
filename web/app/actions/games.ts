@@ -2,7 +2,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { authActionClient, openActionClient } from "@/lib/safe-action";
-import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, deleteGame, invalidateCaches, getGameFull } from "@/lib/store";
+import { getListBySlug, gameExists, upsertGame, getTitles, createGames, createList, deleteGame, invalidateCaches, getGameFull, getListsContaining } from "@/lib/store";
 import { prisma } from "@/lib/prisma";
 import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
@@ -162,10 +162,11 @@ export const addDiscovered = openActionClient
 // transporte plus, on va les chercher à l'ouverture de la modale
 export const gameDetail = openActionClient
   .inputSchema(z.object({ id: z.string() }))
-  .action(async ({ parsedInput: { id } }) => {
+  .action(async ({ parsedInput: { id }, ctx }) => {
     const g = await getGameFull(id);
     if (!g) throw new Error("Jeu introuvable.");
-    return { game: g };
+    const listes = await getListsContaining(g.titre, ctx.user?.id);
+    return { game: g, listes };
   });
 
 export type DiscoverGame = {

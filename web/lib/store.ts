@@ -166,6 +166,22 @@ export function getGamesByLists(listIds: string[]) {
     { tags: [TAGS.games], revalidate: 300 })();
 }
 
+/**
+ * Les listes visibles qui contiennent DÉJÀ ce jeu (comparaison sur le titre, comme
+ * partout ailleurs : les jeux n'ont pas d'identité partagée entre listes).
+ */
+export async function getListsContaining(titre: string, userId?: string | null) {
+  const rows = await prisma.game.findMany({
+    where: {
+      titre: { equals: titre, mode: "insensitive" },
+      list: userId ? { OR: [{ isPublic: true }, { ownerId: userId }] } : { isPublic: true },
+    },
+    select: { list: { select: { slug: true, name: true } } },
+  });
+  const vues = new Set<string>();
+  return rows.map((r) => r.list).filter((l) => !vues.has(l.slug) && vues.add(l.slug));
+}
+
 /** la fiche complète d'un jeu — captures, description, crédits : chargée à la demande */
 export async function getGameFull(id: string) {
   return prisma.game.findUnique({ where: { id } });

@@ -48,6 +48,8 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
   }
 
   const lists = sourceLists.map((l) => ({ slug: l.slug, name: l.name }));
+  // une liste sans propriétaire est collaborative ; sinon il faut en être le sien
+  const gerables = user ? sourceLists.filter((l) => !l.ownerId || l.ownerId === user.id).map((l) => l.slug) : [];
   const titre = scope === "mine" ? "🎮 Tous mes jeux" : "🎮 Tous les jeux";
   const sousTitre = scope === "mine"
     ? `${games.length} jeux · tes listes réunies (${sourceLists.length})`
@@ -75,6 +77,7 @@ export async function AllGamesScreen({ scope = "all" }: { scope?: "all" | "mine"
           lists={lists}
           ownedTitles={ownedTitles}
           showOwned={!!user}
+          gerables={gerables}
         />
       </main>
       <div className="fixed bottom-5 right-5 z-30 sm:hidden">

@@ -7,6 +7,7 @@ import { Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { rescanGame, deleteGameAction } from "@/app/actions/games";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { GameGallery } from "@/components/game-gallery";
 import { AddToList } from "@/components/add-to-list";
@@ -17,8 +18,13 @@ const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
 
 /** Contenu de la fiche d'un jeu — rendu par la page /l/[slug]/[jeu]. */
 export function GameDetail({
-  g, slug, canManage, lists = [],
-}: { g: Game; slug: string; canManage: boolean; lists?: { slug: string; name: string }[] }) {
+  g, slug, canManage, lists = [], dansListes = [],
+}: {
+  g: Game; slug: string; canManage: boolean;
+  lists?: { slug: string; name: string }[];
+  /** listes visibles qui contiennent déjà ce jeu */
+  dansListes?: { slug: string; name: string }[];
+}) {
   const p = prixVal(g);
   const n = noteVal(g);
   const dev = g.prix?.devise ?? "CHF";
@@ -57,6 +63,20 @@ export function GameDetail({
           )}
         </div>
       </div>
+
+      {/* où ce jeu vit déjà — évite de le rajouter deux fois sans le savoir */}
+      {dansListes.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-sm">
+          <span className="text-muted-foreground">Déjà dans :</span>
+          {dansListes.map((l) => (
+            <Link key={l.slug} href={`/l/${l.slug}`}
+              className={cn("rounded-full border px-2.5 py-0.5 text-[13px] font-medium transition hover:border-primary",
+                l.slug === slug && "border-primary bg-primary/10 text-primary")}>
+              {l.name}
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* infos */}
       <div className="flex flex-wrap gap-1.5">

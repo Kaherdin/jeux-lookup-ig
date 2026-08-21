@@ -235,12 +235,14 @@ type Indexed = { g: Game; key: string; hay: string; cats: CategoryKey[]; toks: s
 const splitCsv = (s: string | null) => new Set((s ?? "").split(",").filter(Boolean));
 
 export function GamesView({
-  games, list, canManage, lists = [], ownedTitles = [], showOwned = false,
+  games, list, canManage, lists = [], ownedTitles = [], showOwned = false, gerables = [],
 }: {
   games: Game[];
   list: ListMeta;
   canManage: boolean;
   lists?: { slug: string; name: string }[];
+  /** slugs des listes que l'utilisateur peut modifier — la vue agrégée en mêle plusieurs */
+  gerables?: string[];
   ownedTitles?: string[];
   showOwned?: boolean;
 }) {
@@ -492,6 +494,7 @@ export function GamesView({
   const detail = useAction(gameDetail);
   const onOpen = useCallback((g: Game) => { setFiche(g); detail.execute({ id: g.id }); }, [detail]);
   const complet = detail.result?.data?.game as unknown as Game | undefined;
+  const dansListes = detail.result?.data?.listes ?? [];
   const ficheAffichee = fiche && complet?.id === fiche.id ? { ...fiche, ...complet } : fiche;
 
   const onCheck = useCallback((id: string, c: boolean) => {
@@ -802,7 +805,9 @@ export function GamesView({
           <DialogTitle className="sr-only">{fiche?.titre ?? "Fiche du jeu"}</DialogTitle>
           {ficheAffichee && (
             <>
-              <GameDetail g={ficheAffichee} slug={ficheAffichee.listSlug ?? list.slug} canManage={canManage} lists={lists} />
+              <GameDetail g={ficheAffichee} slug={ficheAffichee.listSlug ?? list.slug} lists={lists}
+                dansListes={dansListes}
+                canManage={canManage || gerables.includes(ficheAffichee.listSlug ?? list.slug)} />
               <Link href={`/l/${ficheAffichee.listSlug ?? list.slug}/${slugifyTitle(ficheAffichee.titre)}`}
                 className="mt-4 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline">
                 Ouvrir la fiche complète ↗
