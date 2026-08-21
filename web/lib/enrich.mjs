@@ -564,11 +564,22 @@ export async function enrichGame(rec, env) {
     appid ? steamPlayers(appid) : null,
     itadLookup(appid, title, env),
   ]);
-  const prix = itadId ? await itadPrices(itadId, env) : null;
+  /**
+   * Trois travaux indépendants : le prix PC (ITAD), le couple lien + prix PlayStation,
+   * et l'estimation LLM. Aucun n'attend les autres, alors on les lance ENSEMBLE et on
+   * ne les attend qu'au moment de s'en servir. Enchaînés, chaque jeu payait leur somme
+   * — ce qui se voit surtout à l'import d'une sélection, où 20 jeux défilent.
+   */
+  const prixP = itadId ? itadPrices(itadId, env) : null;
   // PlayStation : le lien vient d'IGDB, le prix se relève sur la fiche du store — ITAD
   // ne suit que des boutiques PC. Un jeu sans fiche PSN ne coûte qu'une requête IGDB.
-  const psnUrl = rec.psnUrl || (igdb?.igdbId ? await igdbPsnUrl(igdb.igdbId, env) : "");
-  const psn = psnUrl ? await prixPsn(psnUrl) : null;
+  const psnP = (async () => {
+    const url = rec.psnUrl || (igdb?.igdbId ? await igdbPsnUrl(igdb.igdbId, env) : "");
+    return url ? { url, tarif: await prixPsn(url) } : null;
+  })();
+  const llmP = env.ANTHROPIC_API_KEY ? llmGameInfo(title, env) : null;
+
+  const prix = (await prixP) ?? null;
 
   const coopCsv = (rec.coop || "").trim(), multiCsv = (rec.multi || "").trim();
   const modes = {
@@ -592,8 +603,8 @@ export async function enrichGame(rec, env) {
   // enrichissement estimé via LLM (joueurs manquants + durée de vie / envergure / équipe / studio, absents ou douteux dans les APIs)
   let dureeVie = "", tailleEquipe = "", llmDev = "", llmEd = "", llmLocal = null, llmOnline = null;
   let envergure = envergureHeuristic(igdb, reviews, steam);
-  if (env.ANTHROPIC_API_KEY) {
-    const li = await llmGameInfo(title, env);
+  if (llmP) {
+    const li = await llmP;
     if (li) {
       if (!nbJoueurs && li.joueurs) nbJoueurs = String(li.joueurs);
       if (!modes.solo && li.solo) modes.solo = true;
@@ -618,6 +629,7 @@ export async function enrichGame(rec, env) {
   const mJ = nbJoueurs.match(/(\d+)\s*$/) || nbJoueurs.match(/(\d+)/);
   const nbJoueursMax = mJ ? +mJ[1] : (igdb?.joueursMax ?? (Math.max(joueursLocalMax || 0, joueursOnlineMax || 0) || null));
 
+  const psn = await psnP;
   const g = {
     titre: title,
     // noms officiels des sources : servent à vérifier qu'on a bien matché le bon jeu
@@ -657,9 +669,9 @@ export async function enrichGame(rec, env) {
     trailer: steam?.trailer || "", trailerThumb: steam?.trailerThumb || "",
     trailerYoutube: igdb?.videoYoutube || "", // vidéo YouTube IGDB (fallback quand pas de trailer Steam)
     urlSteam: steam?.url || "", urlIgdb: igdb?.url || "", urlStore: prix?.url || "",
-    urlPsn: psn?.url || psnUrl || "",
-    prixPsn: psn && !psn.gratuit
-      ? { prix: psn.prix, base: psn.base, reducPct: psn.reducPct, devise: psn.devise, plusInclus: psn.plusInclus }
+    urlPsn: psn?.tarif?.url || psn?.url || "",
+    prixPsn: psn?.tarif && !psn.tarif.gratuit
+      ? { prix: psn.tarif.prix, base: psn.tarif.base, reducPct: psn.tarif.reducPct, devise: psn.tarif.devise, plusInclus: psn.tarif.plusInclus }
       : null,
     reel: rec.reel || "", createur: rec.createur || "",
     ajouteLe: rec.ajouteLe || "",
@@ -926,9 +938,15 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
   const seen = new Set(existingTitles.map(t => t.toLowerCase()));
   const out = [];
   const skipped = [];
-  const CONC = 6; // une sélection « Top 30 » enrichit 30 jeux : sans parallélisme, c'est interminable
-  for (let i = 0; i < inputs.length; i += CONC) {
-    const batch = await Promise.all(inputs.slice(i, i + CONC).map(async (item) => {
+  // Une sélection « Top 30 » enrichit 30 jeux : sans parallélisme, c'est interminable.
+  // File GLISSANTE plutôt que lots : on garde CONC enrichissements en vol en permanence.
+  // Par lots, le groupe entier attendait son élément le plus lent avant que le suivant
+  // démarre — sur vingt jeux, cela faisait quatre fois l'attente du pire cas.
+  const CONC = 6;
+  const resolus = new Array(inputs.length);
+  let curseur = 0;
+  {
+    const traiter = async (item) => {
       const inp = item.q;
       // écarte les listicles (Top 10, 15 Best Games…) : ce ne sont pas des jeux
       if (looksLikeListicle(inp)) return { skip: inp };
@@ -965,13 +983,20 @@ export async function detectMany({ text = "", playlist = "", extract = false }, 
         }
       }
       return { skip: d.input || inp };
+    };
+    await Promise.all(Array.from({ length: Math.min(CONC, inputs.length) }, async () => {
+      while (curseur < inputs.length) { const k = curseur++; resolus[k] = await traiter(inputs[k]); }
     }));
-    for (const g of batch) {
-      if (!g) continue;
-      if (g.skip) { skipped.push(g.skip); continue; }
-      if (!g.duplicate) seen.add(g.titre.toLowerCase());
-      out.push(g);
-    }
+  }
+  // Le doublon se tranche ICI, une fois tout le monde résolu : deux entrées différentes
+  // peuvent désigner le même jeu, et enrichies en parallèle elles ne se voyaient pas.
+  for (const g of resolus) {
+    if (!g) continue;
+    if (g.skip) { skipped.push(g.skip); continue; }
+    const cle = g.titre.toLowerCase();
+    if (seen.has(cle)) g.duplicate = true;
+    else seen.add(cle);
+    out.push(g);
   }
   return { games: out, skipped, notes };
 }

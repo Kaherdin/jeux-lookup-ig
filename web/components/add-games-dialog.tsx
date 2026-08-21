@@ -102,17 +102,27 @@ export function AddGamesDialog({ slug, trigger }: { slug?: string; trigger: Reac
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      {/* la preview peut lister 35 jeux : le dialogue doit défiler, pas déborder de l'écran */}
-      <DialogContent className="max-h-[90dvh] max-w-xl overflow-y-auto">
+      {/*
+        La preview peut lister 35 jeux : le dialogue doit défiler, pas déborder de l'écran.
+        overflow-x-hidden en plus du défilement vertical : le dialogue est une grille, et
+        une piste de grille s'élargit au min-content de son contenu. Un lien collé sans
+        espace — une URL YouTube, justement — suffisait à faire grossir la modale au-delà
+        de l'écran et à sortir le bouton « Ajouter » du cadre.
+      */}
+      {/* sm:max-w-2xl et non max-w-2xl : le dialogue de base pose déjà sm:max-w-lg, qu'un
+          utilitaire sans variante ne surcharge pas — la modale serait restée à 512 px */}
+      <DialogContent className="max-h-[90dvh] w-full overflow-x-hidden overflow-y-auto sm:max-w-2xl">
         <DialogHeader><DialogTitle>➕ Ajouter des jeux</DialogTitle></DialogHeader>
 
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-3">
           <Textarea
             autoFocus value={input} onChange={(e) => setInput(e.target.value)}
             placeholder={PLACEHOLDER}
             // le textarea se dimensionne au contenu (field-sizing) : on impose un plancher
             // confortable pour qu'on voie tout de suite qu'on peut coller plusieurs lignes
-            className="min-h-[92px] resize-y"
+            // break-all : le champ se dimensionne au contenu (field-sizing), et une URL
+            // d'un seul tenant lui donnait une largeur intrinsèque démesurée
+            className="min-h-[92px] w-full min-w-0 resize-y break-all"
             onKeyDown={(e) => {
               // Entrée = analyser (le geste attendu quand on tape un titre) ;
               // Maj+Entrée = nouvelle ligne, pour lister plusieurs jeux à la main.
@@ -131,7 +141,7 @@ export function AddGamesDialog({ slug, trigger }: { slug?: string; trigger: Reac
         </div>
 
         {/* import de bibliothèque : rare, donc replié — mais toujours à portée de clic */}
-        <div className="rounded-lg border bg-muted/20">
+        <div className="min-w-0 rounded-lg border bg-muted/20">
           <button type="button" onClick={() => setLib((v) => !v)}
             className="flex w-full items-center gap-2 px-3 py-2 text-sm font-semibold hover:bg-muted/40">
             <Library className="h-4 w-4" /> Importer toute une bibliothèque (Steam / PlayStation)
@@ -179,7 +189,7 @@ export function AddGamesDialog({ slug, trigger }: { slug?: string; trigger: Reac
           detected.length === 0 ? (
             <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">Aucun jeu détecté. Vérifie le lien/titre.</p>
           ) : (
-            <div className="space-y-2">
+            <div className="min-w-0 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="min-w-0 truncate text-sm text-muted-foreground">
                   {detected.length} trouvé(s) · <span className="font-semibold text-foreground">{selected.size} sélectionné(s)</span>
