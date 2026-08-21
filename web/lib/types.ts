@@ -7,6 +7,19 @@ export type Prix = {
   plusBasHisto?: number | null;
 } | null;
 
+/**
+ * Prix PlayStation Store. Séparé de `Prix` (ITAD, boutiques PC) : ce n'est ni la même
+ * source ni la même machine, et les deux doivent pouvoir s'afficher côte à côte.
+ * `plusInclus` = compris dans l'abonnement PlayStation Plus, ce qui n'est pas un prix.
+ */
+export type PrixPsn = {
+  prix: number;
+  base: number;
+  reducPct: number;
+  devise: string;
+  plusInclus?: boolean;
+} | null;
+
 export type Modes = {
   solo?: boolean;
   coop?: boolean;
@@ -46,6 +59,7 @@ export type Game = {
   comingSoon: boolean | null;
   prix: Prix;
   prixSteam: number | null;
+  prixPsn: PrixPsn;
   reducPct: number;
   note: number | null;
   noteSource: string | null;

@@ -24,6 +24,7 @@ export function toRow(g) {
     comingSoon: g.comingSoon == null ? null : !!g.comingSoon,
     prix: g.prix ?? null,
     prixSteam: g.prixSteam == null ? null : Number(g.prixSteam),
+    prixPsn: g.prixPsn ?? null,
     reducPct: Number(g.reducPct || 0),
     note: num(g.note),
     noteSource: str(g.noteSource),

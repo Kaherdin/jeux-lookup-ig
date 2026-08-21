@@ -10,7 +10,14 @@ import { CATEGORIES, categorize } from "./categories";
  */
 
 export const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
-export const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
+/** prix PC seul : ITAD, sinon Steam. C'est celui de la colonne Prix. */
+export const prixPcVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
+/**
+ * Prix retenu pour TRIER : le prix PC, ou à défaut celui du PlayStation Store. Un jeu
+ * console qui affiche 24.90 ne doit pas tomber en fin de tri comme s'il n'avait pas de
+ * prix. L'affichage, lui, garde les deux séparés — ce ne sont pas les mêmes boutiques.
+ */
+export const prixVal = (g: Game) => prixPcVal(g) ?? g.prixPsn?.prix ?? null;
 export const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
 export const md = (g: Game) => g.modes ?? {};
 export const TODAY = new Date().toISOString().slice(0, 10);

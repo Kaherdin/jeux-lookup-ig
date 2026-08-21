@@ -148,6 +148,8 @@ model Game {
   comingSoon     Boolean?
   prix           Json?
   prixSteam      Float?
+  /// prix relevé sur le PlayStation Store : { prix, base, reducPct, devise, plusInclus }
+  prixPsn        Json?
   reducPct       Int      @default(0)
   note           Int?
   noteSource     String?

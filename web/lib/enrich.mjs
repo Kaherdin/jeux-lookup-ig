@@ -4,6 +4,7 @@
  * Node 18+, zéro dépendance.
  */
 import { readFileSync, existsSync } from "node:fs";
+import { prixPsn } from "./psn-store.mjs";
 
 export const COUNTRY = "CH", LANG = "fr", DELAY = 1100;
 export const SEUIL_BON_PLAN = 15, SEUIL_REDUC = 40, SEUIL_NOTE = 80;
@@ -185,15 +186,27 @@ async function igdbAuth(env) {
   return (igdbToken = j.access_token || null);
 }
 const IGDB_FIELDS = "name,summary,first_release_date,aggregated_rating,total_rating,total_rating_count,platforms.abbreviation,genres.name,themes.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,cover.image_id,videos.video_id,url,game_modes.slug,multiplayer_modes.*";
-async function igdbQuery(body, env) {
+async function igdbQuery(body, env, endpoint = "games") {
   const tok = await igdbAuth(env); if (!tok) return [];
-  const j = await fetch("https://api.igdb.com/v4/games", {
+  const j = await fetch(`https://api.igdb.com/v4/${endpoint}`, {
     method: "POST",
     headers: { "Client-ID": env.TWITCH_ID, Authorization: `Bearer ${tok}`, "Content-Type": "text/plain" },
     body,
   }).then(r => r.json()).catch(() => []);
   return Array.isArray(j) ? j : [];
 }
+/**
+ * Lien de la fiche PlayStation Store, lu dans les « jeux externes » d'IGDB
+ * (source 36 = PlayStation Store US). C'est la seule piste fiable : Sony n'expose
+ * aucune recherche publique, et une URL devinée depuis le titre ne tombe jamais juste.
+ * Un jeu absent du PS Store n'a tout simplement pas cette source — d'où la chaîne vide.
+ */
+async function igdbPsnUrl(igdbId, env) {
+  if (!igdbId) return "";
+  const r = await igdbQuery(`fields url; where game = ${igdbId} & external_game_source = 36; limit 1;`, env, "external_games");
+  return r?.[0]?.url || "";
+}
+
 // Transforme un objet jeu IGDB brut → forme normalisée.
 function igdbShape(g) {
   const modes = (g.game_modes || []).map(m => m.slug);
@@ -552,6 +565,10 @@ export async function enrichGame(rec, env) {
     itadLookup(appid, title, env),
   ]);
   const prix = itadId ? await itadPrices(itadId, env) : null;
+  // PlayStation : le lien vient d'IGDB, le prix se relève sur la fiche du store — ITAD
+  // ne suit que des boutiques PC. Un jeu sans fiche PSN ne coûte qu'une requête IGDB.
+  const psnUrl = rec.psnUrl || (igdb?.igdbId ? await igdbPsnUrl(igdb.igdbId, env) : "");
+  const psn = psnUrl ? await prixPsn(psnUrl) : null;
 
   const coopCsv = (rec.coop || "").trim(), multiCsv = (rec.multi || "").trim();
   const modes = {
@@ -640,7 +657,10 @@ export async function enrichGame(rec, env) {
     trailer: steam?.trailer || "", trailerThumb: steam?.trailerThumb || "",
     trailerYoutube: igdb?.videoYoutube || "", // vidéo YouTube IGDB (fallback quand pas de trailer Steam)
     urlSteam: steam?.url || "", urlIgdb: igdb?.url || "", urlStore: prix?.url || "",
-    urlPsn: rec.psnUrl || "",
+    urlPsn: psn?.url || psnUrl || "",
+    prixPsn: psn && !psn.gratuit
+      ? { prix: psn.prix, base: psn.base, reducPct: psn.reducPct, devise: psn.devise, plusInclus: psn.plusInclus }
+      : null,
     reel: rec.reel || "", createur: rec.createur || "",
     ajouteLe: rec.ajouteLe || "",
   };

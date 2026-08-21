@@ -145,7 +145,7 @@ const LIST_SELECT = {
   id: true, titre: true, image: true, genre: true, univers: true, themes: true, description: true,
   plateformes: true, trailer: true, trailerYoutube: true, sortieISO: true, sortiePrec: true,
   dispo: true, gratuit: true, gratuitMention: true, bonPlan: true, bienNote: true, comingSoon: true,
-  prix: true, prixSteam: true, reducPct: true, note: true, noteSource: true, metacritic: true,
+  prix: true, prixSteam: true, prixPsn: true, reducPct: true, note: true, noteSource: true, metacritic: true,
   steamPct: true, steamAvis: true, joueursSteam: true, igdbVotes: true,
   modes: true, modesDetail: true, nbJoueurs: true, nbJoueursMax: true, joueursLocalMax: true,
   joueursOnlineMax: true, envergure: true, dureeVie: true,

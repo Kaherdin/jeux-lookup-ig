@@ -13,6 +13,7 @@ import { GameGallery } from "@/components/game-gallery";
 import { AddToList } from "@/components/add-to-list";
 
 const https = (u?: string | null) => (u ? u.replace(/^http:/, "https:") : "");
+// le prix PlayStation a son propre badge : celui-ci ne parle que des boutiques PC
 const prixVal = (g: Game) => g.prix?.meilleur ?? g.prixSteam ?? null;
 const noteVal = (g: Game) => g.note ?? g.metacritic ?? g.steamPct ?? null;
 
@@ -83,6 +84,13 @@ export function GameDetail({
         {g.dispo && <Badge>Dispo</Badge>}
         {g.comingSoon && <Badge variant="secondary">Bientôt</Badge>}
         {g.gratuit ? <Badge className="bg-emerald-600">Gratuit</Badge> : p != null && <Badge variant="secondary">{p} {dev}{g.prix?.store ? ` · ${g.prix.store}` : ""}</Badge>}
+        {g.prixPsn && (
+          <Badge variant="secondary" title="prix relevé sur le PlayStation Store">
+            {g.prixPsn.prix} {g.prixPsn.devise} · PlayStation
+            {g.prixPsn.reducPct > 0 ? ` -${g.prixPsn.reducPct}%` : ""}
+            {g.prixPsn.plusInclus ? " · PS+" : ""}
+          </Badge>
+        )}
         {g.bonPlan && <Badge className="bg-orange-500 text-black">Bon plan</Badge>}
         {n != null && <Badge variant="outline">⭐ {n} {g.noteSource ? `(${g.noteSource})` : ""}</Badge>}
         {g.envergure && <Badge variant="outline">{g.envergure}</Badge>}

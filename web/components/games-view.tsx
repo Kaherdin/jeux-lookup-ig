@@ -21,7 +21,7 @@ import {
   PLATEFORMES, PLATEFORME_BY_KEY, famillesPlateformes, type CategoryKey,
 } from "@/lib/categories";
 import {
-  https, prixVal, noteVal, md, TODAY, estRecent, aVenir, estInde, estGrosStudio,
+  https, prixVal, prixPcVal, noteVal, md, TODAY, estRecent, aVenir, estInde, estGrosStudio,
   sortieVal, popuVal, fmtNb, dureeVal, SORT_VAL, SORT_DEFDIR, SORT_LABEL, faireComparateur,
 } from "@/lib/tri";
 
@@ -726,7 +726,7 @@ export function GamesView({
           <h2 className="mb-3 text-sm font-semibold">🔥 À jouer maintenant — dispo &amp; bien noté</h2>
           <div className="flex gap-3 overflow-x-auto pb-1">
             {hero.map((g) => {
-              const p = prixVal(g), dev = g.prix?.devise ?? "CHF";
+              const p = prixVal(g), dev = g.prix?.devise ?? g.prixPsn?.devise ?? "CHF";
               return (
                 <Link key={g.id} href={gameHref(g.listSlug ?? list.slug, g.titre)}
                   className="min-w-[190px] rounded-xl border bg-card p-3 transition hover:-translate-y-0.5 hover:border-primary">
@@ -971,7 +971,7 @@ const Row = memo(function Row({
 }) {
   const g = it.g;
   const m = md(g);
-  const p = prixVal(g);
+  const p = prixPcVal(g);
   const n = noteVal(g);
   const dev = g.prix?.devise ?? "CHF";
   const store = g.prix?.store ?? "Steam";
@@ -1035,13 +1035,25 @@ const Row = memo(function Row({
       </div>
 
       <div className="hidden whitespace-nowrap text-sm md:block">
-        {g.gratuit ? <span className="font-bold text-emerald-500">Gratuit</span> : p == null ? <span className="text-muted-foreground">—</span> : (
+        {g.gratuit ? <span className="font-bold text-emerald-500">Gratuit</span>
+          : p == null ? (!g.prixPsn && <span className="text-muted-foreground">—</span>) : (
           <>
             <div className="font-bold">{p} {dev}{g.reducPct > 0 && <span className="ml-1 text-orange-500">-{g.reducPct}%</span>}</div>
             <div className="text-[11px] text-muted-foreground">{store}</div>
             {g.prix?.plusBasHisto != null && <div className="text-[11px] text-muted-foreground">bas {g.prix.plusBasHisto} {dev}</div>}
           </>
         )}
+        {/* le prix console vit sous le prix PC : autre boutique, autre machine, jamais
+            comparable — et il reste le seul prix affiché quand le jeu n'est pas sur PC */}
+        {g.prixPsn && (
+          <div className={cn("text-[11px]", p == null ? "font-bold text-sm text-foreground" : "text-muted-foreground")}
+            title="prix relevé sur le PlayStation Store">
+            {p == null ? "" : "PS "}{g.prixPsn.prix} {g.prixPsn.devise}
+            {g.prixPsn.reducPct > 0 && <span className="ml-1 text-orange-500">-{g.prixPsn.reducPct}%</span>}
+            {g.prixPsn.plusInclus && <span className="ml-1 text-sky-400" title="compris dans le PlayStation Plus">PS+</span>}
+          </div>
+        )}
+        {p == null && g.prixPsn && <div className="text-[11px] text-muted-foreground">PlayStation Store</div>}
       </div>
 
       <div className="text-sm">
