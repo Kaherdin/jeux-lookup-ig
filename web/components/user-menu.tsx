@@ -3,7 +3,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
-import { LogOut, User as UserIcon, RefreshCw, Loader2, Library, Gamepad2 } from "lucide-react";
+import { LogOut, User as UserIcon, RefreshCw, Loader2, Library, Gamepad2, Heart } from "lucide-react";
+import { ouvrirMatchs } from "@/lib/matchs";
 import { signOut } from "@/lib/auth-client";
 import { rescanList, importSteam } from "@/app/actions/games";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,9 @@ export function UserMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link href="/mes-jeux"><Library className="mr-2 h-4 w-4" /> Tous mes jeux</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); ouvrirMatchs(); }}>
+          <Heart className="mr-2 h-4 w-4 fill-rose-500 text-rose-500" /> Ma sélection
         </DropdownMenuItem>
         <DropdownMenuItem disabled={syncSteam.isPending}
           onSelect={(e) => { e.preventDefault(); syncSteam.execute({}); }}>

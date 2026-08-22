@@ -6,6 +6,7 @@ import { ThemeToggle } from "./theme-toggle";
 import { ListSwitcher } from "./list-switcher";
 import { UserMenu } from "./user-menu";
 import { CreateListDialog } from "./create-list-dialog";
+import { MatchsBouton } from "./matchs";
 import { Button } from "@/components/ui/button";
 
 export async function SiteHeader({
@@ -30,6 +31,9 @@ export async function SiteHeader({
           } />
         )}
         <div className="ml-auto flex items-center gap-1">
+          {/* la sélection de « Trouve-moi un jeu » se consulte depuis n'importe quelle
+              page ; le bouton n'apparaît que lorsqu'il y a quelque chose dedans */}
+          <MatchsBouton />
           {session?.user && (
             <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
               <Link href="/mes-jeux"><Library className="mr-1 h-4 w-4" /> Tous mes jeux</Link>

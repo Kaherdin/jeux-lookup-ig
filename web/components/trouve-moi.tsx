@@ -1,12 +1,13 @@
 "use client";
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+
 import { useAction } from "next-safe-action/hooks";
 import { toast } from "sonner";
-import { Loader2, X, Check, RotateCcw, Bookmark, ArrowLeft } from "lucide-react";
-import { proposerJeux, copyToList } from "@/app/actions/games";
-import { createNewList } from "@/app/actions/lists";
+import { Loader2, X, Check, RotateCcw, Bookmark, ArrowLeft, Volume2, VolumeX } from "lucide-react";
+import { proposerJeux } from "@/app/actions/games";
+import { ajouterMatch } from "@/lib/matchs";
+import { BandeauMatchs, MatchsDialog, useMatchs } from "@/components/matchs";
 import { questionsPertinentes, critereDe, resume, type Criteres } from "@/lib/quiz";
 import type { Proposition } from "@/lib/selection";
 import { https, noteVal, prixVal, dureeVal } from "@/lib/tri";
@@ -25,7 +26,6 @@ type Etape = "quiz" | "defile" | "fin";
 const SEUIL = 110;
 
 export function TrouveMoi() {
-  const router = useRouter();
   const [etape, setEtape] = useState<Etape>("quiz");
   const [reponses, setReponses] = useState<Record<string, string[]>>({});
   const [iq, setIq] = useState(0);
@@ -69,18 +69,23 @@ export function TrouveMoi() {
     else recherche.execute({ criteres: criteres as Criteres });
   }, [iq, posees.length, criteres, recherche]);
 
+  /**
+   * Tout se fait ici, à plat. Passer par les updaters de setState pour lire la carte
+   * courante revenait à écrire dans le stockage — donc à mettre à jour la barre du haut
+   * — pendant le rendu de ce composant, ce que React refuse à juste titre : un updater
+   * doit être pur, il peut être rejoué.
+   */
   const trancher = useCallback((garder: boolean) => {
-    setFile((f) => {
-      const p = f[i];
-      if (p && garder) setGardes((g) => (g.some((x) => x.id === p.jeu.id) ? g : [...g, p.jeu]));
-      return f;
-    });
-    setI((n) => {
-      const suiv = n + 1;
-      if (suiv >= file.length) setEtape("fin");
-      return suiv;
-    });
-  }, [i, file.length]);
+    const p = file[i];
+    if (p && garder) {
+      // la sélection survit à la session et se consulte depuis n'importe quelle page
+      ajouterMatch(p.jeu);
+      setGardes((g) => (g.some((x) => x.id === p.jeu.id) ? g : [...g, p.jeu]));
+    }
+    const suiv = i + 1;
+    setI(suiv);
+    if (suiv >= file.length) setEtape("fin");
+  }, [file, i]);
 
   // ── clavier : le geste ne doit jamais être le seul moyen ────────────
   useEffect(() => {
@@ -158,9 +163,7 @@ export function TrouveMoi() {
   }
 
   // ── récapitulatif ───────────────────────────────────────────────────
-  return (
-    <Fin gardes={gardes} externes={externes} vus={i} onRecommencer={recommencer} router={router} />
-  );
+  return <Fin externes={externes} vus={i} onRecommencer={recommencer} />;
 }
 
 /** La pile de cartes. Une seule décision à la fois, c'est tout l'intérêt. */
@@ -171,6 +174,8 @@ function Defile({
   onTrancher: (garder: boolean) => void; onFin: () => void; gardes: number;
 }) {
   const [dx, setDx] = useState(0);
+  // le choix du son vaut pour la session : le refaire à chaque carte serait pénible
+  const [son, setSon] = useState(false);
   const [glisse, setGlisse] = useState(false);
   const depart = useRef(0);
   const carte = useRef<HTMLDivElement>(null);
@@ -268,11 +273,7 @@ function Defile({
             </div>
           )}
 
-          {g.image ? (
-            <img src={https(g.image)} alt="" draggable={false} className="h-1/2 w-full object-cover" />
-          ) : (
-            <div className="flex h-1/2 w-full items-center justify-center bg-muted text-6xl">🎮</div>
-          )}
+          <Media g={g} son={son} onSon={() => setSon((s) => !s)} />
 
           <div className="flex h-1/2 flex-col gap-2 overflow-y-auto p-4">
             <div className="flex items-start justify-between gap-2">
@@ -324,9 +325,59 @@ function Defile({
       <p className="mt-3 text-center text-xs text-muted-foreground">
         Glisse la carte, ou utilise ← et → au clavier.
       </p>
+      <BandeauMatchs />
       <div className="mt-1 flex flex-wrap justify-center gap-1.5 text-[11px] text-muted-foreground">
         {resume(criteres).map((r) => <span key={r} className="rounded-full bg-muted px-2 py-0.5">{r}</span>)}
       </div>
+    </div>
+  );
+}
+
+/**
+ * La moitié haute de la carte : le trailer s'il existe, sinon la jaquette.
+ *
+ * Il se lance tout seul et sans habillage — pas de bouton play à viser, pas de barre de
+ * lecture : on regarde, on tranche. 495 jeux du catalogue ont une vidéo YouTube, aucun
+ * n'a de mp4 Steam pour l'instant, mais les deux chemins sont là.
+ *
+ * `pointer-events-none` sur le média est ce qui rend le tout compatible avec le geste :
+ * sans ça, une iframe avale le pointeur et la carte ne suit plus le doigt.
+ */
+function Media({ g, son, onSon }: { g: Game; son: boolean; onSon: () => void }) {
+  const yt = g.trailerYoutube?.trim();
+  const src = yt
+    // nocookie : rien n'est déposé chez le visiteur tant qu'il n'a pas lancé la vidéo
+    ? `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&mute=${son ? 0 : 1}&controls=0&loop=1&playlist=${yt}` +
+      `&modestbranding=1&rel=0&playsinline=1&disablekb=1&fs=0&iv_load_policy=3`
+    : null;
+
+  return (
+    <div className="relative h-1/2 w-full overflow-hidden bg-muted">
+      {g.trailer ? (
+        <video key={g.id} src={https(g.trailer)} poster={https(g.image)} autoPlay muted={!son} loop playsInline
+          className="pointer-events-none h-full w-full object-cover" />
+      ) : src ? (
+        <iframe key={`${g.id}-${son}`} src={src} title={`Trailer de ${g.titre}`} allow="autoplay; encrypted-media"
+          // la vidéo déborde volontairement du cadre : YouTube ajoute des bandes noires
+          // sur une 16/9 forcée dans un format plus carré, et on veut du plein cadre
+          className="pointer-events-none absolute left-1/2 top-1/2 h-[calc(100%+120px)] w-[177.78%] min-w-full -translate-x-1/2 -translate-y-1/2 border-0" />
+      ) : g.image ? (
+        <img src={https(g.image)} alt="" draggable={false} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-6xl">🎮</div>
+      )}
+
+      {(g.trailer || src) && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onSon(); }}
+          className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-2 text-white backdrop-blur transition hover:bg-black/80"
+          aria-label={son ? "Couper le son" : "Activer le son"}
+        >
+          {son ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+        </button>
+      )}
     </div>
   );
 }
@@ -335,70 +386,51 @@ const Etiq = ({ children }: { children: React.ReactNode }) => (
   <span className="rounded-md bg-muted px-1.5 py-0.5 font-semibold">{children}</span>
 );
 
-/** Fin de session : ce qu'on a gardé, et de quoi en faire une liste. */
+/**
+ * Fin de session. La sélection n'est plus une notion locale à cet écran : c'est la même
+ * que dans la barre du haut et le bandeau du défilé, et c'est la fenêtre commune qui
+ * sait en faire une liste — inutile de refaire ici un second formulaire de création.
+ */
 function Fin({
-  gardes, externes, vus, onRecommencer, router,
+  externes, vus, onRecommencer,
 }: {
-  gardes: Game[]; externes: Externe[]; vus: number;
-  onRecommencer: () => void; router: ReturnType<typeof useRouter>;
+  externes: Externe[]; vus: number; onRecommencer: () => void;
 }) {
-  const [nom, setNom] = useState("");
+  const matchs = useMatchs();
   const [ouvert, setOuvert] = useState(false);
-
-  const copie = useAction(copyToList, {
-    onSuccess: ({ data }) => {
-      toast.success(`« ${data?.name} » : ${data?.added ?? gardes.length} jeu(x) enregistré(s).`);
-      if (data?.slug) router.push(`/l/${data.slug}`);
-    },
-    onError: ({ error }) => toast.error(error.serverError ?? "Échec de l'enregistrement."),
-  });
-  const creation = useAction(createNewList, {
-    onSuccess: ({ data }) => {
-      if (data?.slug) copie.execute({ ids: gardes.map((g) => g.id), toSlug: data.slug });
-    },
-    onError: ({ error }) => toast.error(error.serverError ?? "Échec de la création."),
-  });
-  const occupe = creation.isPending || copie.isPending;
+  const n = matchs.length;
 
   return (
     <div className="mx-auto w-full max-w-lg space-y-5 px-4 py-6">
       <div className="text-center">
         <h1 className="text-2xl font-bold">
-          {gardes.length ? `${gardes.length} jeu${gardes.length > 1 ? "x" : ""} gardé${gardes.length > 1 ? "s" : ""}` : "Rien gardé cette fois"}
+          {n ? `${n} jeu${n > 1 ? "x" : ""} dans ta sélection` : "Rien gardé cette fois"}
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">{vus} proposition{vus > 1 ? "s" : ""} passée{vus > 1 ? "s" : ""} en revue.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {vus} proposition{vus > 1 ? "s" : ""} passée{vus > 1 ? "s" : ""} en revue.
+        </p>
       </div>
 
-      {!!gardes.length && (
+      {!!n && (
         <ul className="space-y-2">
-          {gardes.map((g) => (
-            <li key={g.id} className="flex items-center gap-3 rounded-lg border p-2">
-              {g.image ? <img src={https(g.image)} alt="" className="h-12 w-20 shrink-0 rounded object-cover" />
+          {matchs.slice(0, 8).map((m) => (
+            <li key={m.id} className="flex items-center gap-3 rounded-lg border p-2">
+              {m.image ? <img src={https(m.image)} alt="" className="h-12 w-20 shrink-0 rounded object-cover" />
                 : <span className="flex h-12 w-20 shrink-0 items-center justify-center rounded bg-muted">🎮</span>}
-              <span className="min-w-0 flex-1 truncate font-semibold">{g.titre}</span>
-              {noteVal(g) != null && <span className="shrink-0 text-sm text-muted-foreground">{noteVal(g)}</span>}
+              <span className="min-w-0 flex-1 truncate font-semibold">{m.titre}</span>
+              {m.note != null && <span className="shrink-0 text-sm text-muted-foreground">{m.note}</span>}
             </li>
           ))}
+          {n > 8 && <li className="text-center text-sm text-muted-foreground">et {n - 8} de plus…</li>}
         </ul>
       )}
 
-      {!!gardes.length && (
-        ouvert ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Input autoFocus value={nom} onChange={(e) => setNom(e.target.value)}
-              placeholder="Nom de la liste (ex. Soirée de samedi)…" className="h-9 min-w-0 flex-1"
-              onKeyDown={(e) => { if (e.key === "Enter" && nom.trim().length >= 2) creation.execute({ name: nom.trim(), isPublic: true }); }} />
-            <Button disabled={occupe || nom.trim().length < 2} onClick={() => creation.execute({ name: nom.trim(), isPublic: true })}>
-              {occupe && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Créer
-            </Button>
-            <Button variant="ghost" onClick={() => setOuvert(false)}>Annuler</Button>
-          </div>
-        ) : (
-          <Button className="w-full" size="lg" onClick={() => setOuvert(true)}>
-            <Bookmark className="mr-2 h-4 w-4" /> En faire une liste
-          </Button>
-        )
+      {!!n && (
+        <Button className="w-full" size="lg" onClick={() => setOuvert(true)}>
+          <Bookmark className="mr-2 h-4 w-4" /> Voir ma sélection et en faire une liste
+        </Button>
       )}
+      <MatchsDialog ouvert={ouvert} onOuvert={setOuvert} matchs={matchs} />
 
       {/* le catalogue n'avait rien : ce qu'IGDB propose, clairement séparé */}
       {!!externes.length && (
@@ -421,7 +453,7 @@ function Fin({
 
       <div className="flex flex-wrap justify-center gap-2">
         <Button variant="outline" onClick={onRecommencer}>
-          <RotateCcw className="mr-2 h-4 w-4" /> Recommencer
+          <RotateCcw className="mr-2 h-4 w-4" /> Une autre session
         </Button>
         <Button variant="ghost" asChild><Link href="/">Retour au catalogue</Link></Button>
       </div>
