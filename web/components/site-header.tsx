@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, Search, Library } from "lucide-react";
+import { Plus, Search, Library, Sparkles } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { getPublicLists, getUserLists } from "@/lib/store";
 import { ThemeToggle } from "./theme-toggle";
@@ -35,8 +35,13 @@ export async function SiteHeader({
               <Link href="/mes-jeux"><Library className="mr-1 h-4 w-4" /> Tous mes jeux</Link>
             </Button>
           )}
+          {/* « Trouver » désignait la recherche IGDB par critères : le mot revient
+              maintenant au questionnaire, et l'autre devient « Explorer », ce qu'il est */}
           <Button asChild variant="ghost" size="sm">
-            <Link href="/?vue=decouvrir"><Search className="mr-1 h-4 w-4" /> <span className="hidden sm:inline">Trouver</span></Link>
+            <Link href="/trouver"><Sparkles className="mr-1 h-4 w-4" /> <span className="hidden sm:inline">Trouve-moi un jeu</span></Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
+            <Link href="/?vue=decouvrir"><Search className="mr-1 h-4 w-4" /> Explorer</Link>
           </Button>
           <ThemeToggle />
           <UserMenu

@@ -273,6 +273,12 @@ export const PLATEFORME_BY_KEY: Record<string, Plateforme> = Object.fromEntries(
  * Familles de machines d'un jeu, dans l'ordre de PLATEFORMES. Un jeu multiplateforme
  * en touche plusieurs ; un jeu Stadia-seulement n'en touche aucune, et c'est voulu.
  */
+/** Cette machine précise relève-t-elle de la famille donnée ? (« Switch » → nintendo) */
+export function estDeLaFamille(plateforme: string, key: string): boolean {
+  const f = PLATEFORME_BY_KEY[key];
+  return !!f && f.re.test(normalize(plateforme).trim());
+}
+
 export function famillesPlateformes(plateformes?: string[] | null): string[] {
   const hit = new Set<string>();
   for (const brut of plateformes ?? []) {

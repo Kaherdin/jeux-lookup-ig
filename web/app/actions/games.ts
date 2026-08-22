@@ -8,7 +8,11 @@ import { allow } from "@/lib/ratelimit";
 import { fetchPsnLibrary } from "@/lib/psn";
 import { fetchSteamLibrary } from "@/lib/steam";
 import { enrichGame, detectAnything, igdbDiscover } from "@/lib/enrich.mjs";
-import type { PreviewGame } from "@/lib/types";
+import { getCatalogue, getOwnedTitles } from "@/lib/store";
+import { proposer, tropPeu } from "@/lib/selection";
+import { CATEGORIES, PLATEFORME_BY_KEY } from "@/lib/categories";
+import type { PreviewGame, Game } from "@/lib/types";
+import type { Criteres } from "@/lib/quiz";
 
 const env = () => ({
   TWITCH_ID: process.env.TWITCH_ID,
@@ -147,6 +151,55 @@ export const discoverGames = openActionClient
   .action(async ({ parsedInput }) => {
     const games = await igdbDiscover(parsedInput, env());
     return { games: games as DiscoverGame[] };
+  });
+
+/**
+ * « Trouve-moi un jeu » : les critères du questionnaire, une file de propositions.
+ *
+ * Le tri se fait ICI et pas dans le navigateur : la page d'accueil envoie déjà tout le
+ * catalogue au client, ce qui n'a aucun sens pour un écran conçu pour le pouce. Le
+ * catalogue est de toute façon en cache côté serveur — on ne paie donc rien de plus.
+ */
+const CRITERES = z.object({
+  joueurs: z.number().int().min(1).max(8),
+  ensemble: z.enum(["coop", "versus"]).nullable(),
+  local: z.boolean().nullable(),
+  familles: z.array(z.string()).max(12),
+  dureeMin: z.number().nullable(),
+  dureeMax: z.number().nullable(),
+  plateforme: z.string().nullable(),
+  ecarterPossedes: z.boolean(),
+});
+
+export const proposerJeux = openActionClient
+  .inputSchema(z.object({ criteres: CRITERES }))
+  .action(async ({ parsedInput: { criteres }, ctx }) => {
+    if (!(await allow(ctx.user ? "general" : "anon", ctx.key))) {
+      throw new Error("Trop de recherches d'affilée — laisse passer une minute.");
+    }
+    const jeux = (await getCatalogue()) as unknown as Game[];
+    const possedes = new Set(
+      ctx.user ? (await getOwnedTitles(ctx.user.id)).map((t) => t.toLowerCase()) : []
+    );
+    const props = proposer(jeux, criteres as Criteres, { possedes, taille: 30 });
+
+    // Cul-de-sac : 576 jeux ne couvrent pas toutes les envies, et une combinaison un peu
+    // pointue peut ne rien donner. Plutôt qu'un écran vide, on repose exactement les
+    // mêmes critères à IGDB — les jeux qui en viennent sont signalés comme extérieurs.
+    let ailleurs: unknown[] = [];
+    if (tropPeu(props)) {
+      const fam = CATEGORIES.filter((c) => criteres.familles.includes(c.key));
+      ailleurs = await igdbDiscover({
+        platforms: (criteres.plateforme && PLATEFORME_BY_KEY[criteres.plateforme]?.igdb) || [],
+        genres: [...new Set(fam.flatMap((c) => c.igdbGenres))],
+        themes: [...new Set(fam.flatMap((c) => c.igdbThemes))],
+        modes: criteres.ensemble === "coop" ? [3] : criteres.ensemble === "versus" ? [2] : [],
+        coopLocal: criteres.local === true,
+        playersMin: criteres.joueurs > 1 ? criteres.joueurs : 0,
+        sort: "pop",
+      }, env(), 20);
+    }
+    return { props, ailleurs };
   });
 
 // ajoute un jeu trouvé par la découverte (épinglé par ID IGDB) → enrichit + enregistre
